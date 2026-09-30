@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111214">
+  <meta name="description" content="Seven plain-text scratchpads in your macOS menu bar, with Markdown checklists and iCloud backups.">
+  <meta property="og:title" content="BetterTot">
+  <meta property="og:description" content="Seven plain-text scratchpads, one shortcut away.">
+  <meta property="og:image" content="https://raw.githubusercontent.com/saaivignesh20/BetterTot/main/Assets/BetterTot-demo-still.png">
+  <title>BetterTot - seven scratchpads in your macOS menu bar</title>
+  <link rel="icon" href="assets/AppIcon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg class="icon-defs" aria-hidden="true">
+    <symbol id="icon-list" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M3.5 5a.5.5 0 1 0 0 .01M3.5 12a.5.5 0 1 0 0 .01M3.5 19a.5.5 0 1 0 0 .01M8 5h13M8 12h13M8 19h13"/></symbol>
+    <symbol id="icon-list-ordered" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5h10m-10 7h10m-10 7h10M4 4h1v5M4 9h2m.5 11H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02"/></symbol>
+    <symbol id="icon-list-checks" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5h8m-8 7h8m-8 7h8M3 17l2 2l4-4M3 7l2 2l4-4"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0a2.34 2.34 0 0 0 3.319 1.915a2.34 2.34 0 0 1 2.33 4.033a2.34 2.34 0 0 0 0 3.831a2.34 2.34 0 0 1-2.33 4.033a2.34 2.34 0 0 0-3.319 1.915a2.34 2.34 0 0 1-4.659 0a2.34 2.34 0 0 0-3.32-1.915a2.34 2.34 0 0 1-2.33-4.033a2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></g></symbol>
+    <symbol id="icon-pin" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1z"/></symbol>
+    <symbol id="icon-control-center" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="2" fill="currentColor" stroke="none"/><circle cx="16" cy="17" r="2" fill="currentColor" stroke="none"/></g></symbol>
+    <symbol id="icon-wifi" viewBox="0 0 24 24"><path fill="currentColor" d="M10.225 20.275Q9.5 19.55 9.5 18.5t.725-1.775T12 16t1.775.725t.725 1.775t-.725 1.775T12 21t-1.775-.725m5.338-9.675q1.687.6 3.062 1.65q.5.375.513.988T18.7 14.3q-.425.425-1.05.438t-1.125-.338q-.95-.65-2.1-1.025T12 13t-2.425.375t-2.1 1.025q-.5.35-1.125.325t-1.05-.45q-.425-.45-.425-1.062t.5-.988q1.375-1.05 3.063-1.638T12 10t3.563.6m2.324-5.575q2.763 1.025 4.963 2.9q.5.425.525 1.05t-.425 1.075q-.425.425-1.05.438t-1.125-.388q-1.8-1.475-4.037-2.287T12 7t-4.737.813T3.225 10.1q-.5.4-1.125.388t-1.05-.438Q.6 9.6.625 8.975t.525-1.05q2.2-1.875 4.963-2.9T12 4t5.888 1.025"/></symbol>
+    <symbol id="icon-circles-four" viewBox="0 0 256 256"><path fill="currentColor" d="M80 40a40 40 0 1 0 40 40a40 40 0 0 0-40-40m0 64a24 24 0 1 1 24-24a24 24 0 0 1-24 24m96 16a40 40 0 1 0-40-40a40 40 0 0 0 40 40m0-64a24 24 0 1 1-24 24a24 24 0 0 1 24-24m-96 80a40 40 0 1 0 40 40a40 40 0 0 0-40-40m0 64a24 24 0 1 1 24-24a24 24 0 0 1-24 24m96-64a40 40 0 1 0 40 40a40 40 0 0 0-40-40m0 64a24 24 0 1 1-24-24a24 24 0 0 1 24-24"/></symbol>
+    <symbol id="icon-pencil" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4"/></symbol>
+    <symbol id="icon-drive" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 16h.01m-7.798-4.423a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zm19.734.436H2.054M6 16h.01"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12a9 9 0 0 1 15.74-6.26L21 8m0-5v5h-5m5 4a9 9 0 0 1-15.74 6.26L3 16m0 5v-5h5"/></symbol>
+    <symbol id="icon-cloud" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9"/></symbol>
+    <symbol id="icon-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+    <symbol id="icon-cloud-upload" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 13v8m-8-6.1A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.24M8 17l4-4l4 4"/></symbol>
+    <symbol id="icon-history" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8m0-5v5h5m4-1v5l4 2"/></symbol>
+  </svg>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="BetterTot home">
+      <img src="assets/AppIcon.svg" alt="" width="32" height="32">
+      <span>BetterTot</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a class="source-link" href="https://github.com/saaivignesh20/BetterTot" aria-label="BetterTot on GitHub, 2 stars">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12c0 5.303 3.438 9.8 8.205 11.385c.6.113.82-.258.82-.577c0-.285-.01-1.04-.015-2.04c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729c1.205.084 1.838 1.236 1.838 1.236c1.07 1.835 2.809 1.305 3.495.998c.108-.776.417-1.305.76-1.605c-2.665-.3-5.466-1.332-5.466-5.93c0-1.31.465-2.38 1.235-3.22c-.135-.303-.54-1.523.105-3.176c0 0 1.005-.322 3.3 1.23c.96-.267 1.98-.399 3-.405c1.02.006 2.04.138 3 .405c2.28-1.552 3.285-1.23 3.285-1.23c.645 1.653.24 2.873.12 3.176c.765.84 1.23 1.91 1.23 3.22c0 4.61-2.805 5.625-5.475 5.92c.42.36.81 1.096.81 2.22c0 1.606-.015 2.896-.015 3.286c0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+        <span class="source-label">GitHub</span>
+        <span class="star-count">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z"/></svg>
+          <span id="github-stars">2</span>
+        </span>
+      </a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <h1 id="hero-title">BetterTot</h1>
+          <p class="hero-line">Seven scratchpads. One shortcut.</p>
+          <p class="hero-detail">Capture text, links, and checklists from anywhere on your Mac.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/saaivignesh20/BetterTot/releases/latest">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10l5 5l5-5"/></g></svg>
+              <span>Download for macOS</span>
+            </a>
+            <p class="hero-meta"><span class="download-count"><span id="github-downloads">5</span> downloads</span><span class="hero-version">&middot; Version 0.3.4</span></p>
+            <p class="release-note">macOS 13 or later</p>
+          </div>
+        </div>
+
+        <figure class="product-demo" aria-label="BetterTot scratchpad">
+          <div class="feature-visual hero-clean-visual">
+            <div class="hero-popover hero-clean-popover">
+              <div class="tot-toolbar"><span class="close-dot">&times;</span><span class="color-dots"><i class="dot dot-yellow active"></i><i class="dot dot-orange"></i><i class="dot dot-red"></i><i class="dot dot-purple"></i><i class="dot dot-blue"></i><i class="dot dot-cyan"></i><i class="dot dot-green"></i></span><span class="toolbar-icon"><svg><use href="#icon-pin"/></svg></span></div>
+              <div class="hero-demo-body"><p class="checklist-line"><span class="check checked"></span>Review the latest draft</p><p class="checklist-line"><span class="check"></span>Send the final build</p><p class="hero-demo-cursor">Meeting moved to 3:30.</p></div>
+              <div class="tot-footer"><span class="footer-stats">4 lines &middot; 14 words &middot; 85 chars</span><span class="footer-tools"><span class="footer-tool" role="img" aria-label="Bulleted list" title="Bulleted list"><svg><use href="#icon-list"/></svg></span><span class="footer-tool" role="img" aria-label="Numbered list" title="Numbered list"><svg><use href="#icon-list-ordered"/></svg></span><span class="footer-tool" role="img" aria-label="Checklist" title="Checklist"><svg><use href="#icon-list-checks"/></svg></span></span><span class="footer-tool footer-settings" role="img" aria-label="Settings" title="Settings"><svg><use href="#icon-settings"/></svg></span></div>
+            </div>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature-section capture-section" aria-labelledby="capture-title">
+      <div class="mac-menubar capture-menubar">
+        <div class="menubar-left"><strong class="apple-mark" aria-label="Apple">&#63743;</strong><strong class="finder-label">Finder</strong><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Window</span><span>Help</span></div>
+        <div class="menubar-right">
+          <span class="menubar-status-icon menubar-optional" title="Wi-Fi"><svg aria-hidden="true"><use href="#icon-wifi"/></svg></span>
+          <span class="menubar-battery" aria-label="Battery 100 percent">100+</span>
+          <span class="menubar-bettertot"><img src="assets/MenuBarIcon.png" alt="BetterTot"></span>
+          <span class="menubar-status-icon menubar-control" title="Control Centre"><svg aria-hidden="true"><use href="#icon-control-center"/></svg></span>
+          <span class="menubar-clock"><span class="clock-date">Sun Aug 23</span><span>02:45</span></span>
+        </div>
+      </div>
+      <div class="section-inner feature-layout">
+        <div class="feature-copy">
+          <p class="feature-kicker">01 / Instant capture</p>
+          <h2 id="capture-title">A note without a detour.</h2>
+          <p>Press Option-Command-Space from any app. BetterTot opens from the menu bar, saves as you type, and closes when you are done.</p>
+        </div>
+        <figure class="feature-art">
+          <div class="capture-panel-shell" role="img" aria-label="BetterTot scratchpad opened from the menu bar, showing release notes and list controls">
+            <div class="tot-popover">
+              <div class="tot-toolbar"><span class="close-dot">&times;</span><span class="color-dots"><i class="dot dot-yellow active"></i><i class="dot dot-orange"></i><i class="dot dot-red"></i><i class="dot dot-purple"></i><i class="dot dot-blue"></i><i class="dot dot-cyan"></i><i class="dot dot-green"></i></span><span class="toolbar-icon"><svg><use href="#icon-pin"/></svg></span></div>
+              <div class="pad-content"><h3>Release notes</h3><p>Keep each project close without a folder tree.</p><p>- Fix the details<br>- Ship the build</p></div>
+              <div class="tot-footer"><span class="footer-stats">7 lines &middot; 16 words &middot; 98 chars</span><span class="footer-tools"><span class="footer-tool" role="img" aria-label="Bulleted list" title="Bulleted list"><svg><use href="#icon-list"/></svg></span><span class="footer-tool" role="img" aria-label="Numbered list" title="Numbered list"><svg><use href="#icon-list-ordered"/></svg></span><span class="footer-tool" role="img" aria-label="Checklist" title="Checklist"><svg><use href="#icon-list-checks"/></svg></span></span><span class="footer-tool footer-settings" role="img" aria-label="Settings" title="Settings"><svg><use href="#icon-settings"/></svg></span></div>
+            </div>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature-section feature-section-dark" aria-labelledby="pads-title">
+      <div class="section-inner feature-layout feature-layout-reverse">
+        <div class="feature-copy">
+          <p class="feature-kicker">02 / Seven pads</p>
+          <h2 id="pads-title">A pad for each thread.</h2>
+          <p>Each colored dot opens a separate pad. Switch with Command-1 through Command-7 and keep work, errands, and temporary text apart.</p>
+        </div>
+        <figure class="feature-art">
+          <div class="feature-visual pads-visual" aria-label="BetterTot's seven colored pads">
+            <div class="tot-popover">
+              <div class="tot-toolbar"><span class="close-dot">&times;</span><span class="color-dots"><i class="dot dot-yellow active"></i><i class="dot dot-orange"></i><i class="dot dot-red"></i><i class="dot dot-purple"></i><i class="dot dot-blue"></i><i class="dot dot-cyan"></i><i class="dot dot-green"></i></span><span class="toolbar-icon"><svg><use href="#icon-pin"/></svg></span></div>
+              <div class="pad-content"><h3>Release notes</h3><p>Check the installer on an Intel Mac.</p><p>Switch pads with <code>Command&nbsp;1</code> through <code>Command&nbsp;7</code>.</p></div>
+              <div class="tot-footer"><span class="footer-stats">4 lines &middot; 18 words &middot; 107 chars</span><span class="footer-tools"><span class="footer-tool" role="img" aria-label="Bulleted list" title="Bulleted list"><svg><use href="#icon-list"/></svg></span><span class="footer-tool" role="img" aria-label="Numbered list" title="Numbered list"><svg><use href="#icon-list-ordered"/></svg></span><span class="footer-tool" role="img" aria-label="Checklist" title="Checklist"><svg><use href="#icon-list-checks"/></svg></span></span><span class="footer-tool footer-settings" role="img" aria-label="Settings" title="Settings"><svg><use href="#icon-settings"/></svg></span></div>
+            </div>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature-section feature-section-paper" aria-labelledby="markdown-title">
+      <div class="section-inner feature-layout">
+        <div class="feature-copy">
+          <p class="feature-kicker">03 / Markdown and checklists</p>
+          <h2 id="markdown-title">Plain text, with useful structure.</h2>
+          <p>Type Markdown for headings, emphasis, code, links, lists, and tasks. BetterTot styles it in place while the files remain ordinary UTF-8 text.</p>
+        </div>
+        <figure class="feature-art">
+          <div class="feature-visual markdown-visual" aria-label="BetterTot markdown and checklist editor">
+            <div class="tot-popover">
+              <div class="tot-toolbar"><span class="close-dot">&times;</span><span class="color-dots"><i class="dot dot-yellow active"></i><i class="dot dot-orange"></i><i class="dot dot-red"></i><i class="dot dot-purple"></i><i class="dot dot-blue"></i><i class="dot dot-cyan"></i><i class="dot dot-green"></i></span><span class="toolbar-icon"><svg><use href="#icon-pin"/></svg></span></div>
+              <div class="markdown-body"><h3>Trip checklist</h3><p class="checklist-line"><span class="check checked"></span>Download the tickets</p><p class="checklist-line"><span class="check"></span>Charge the camera</p><p class="bullet-line"><span class="bullet"></span>Museum closes at 5</p></div>
+              <div class="tot-footer"><span class="footer-stats">5 lines &middot; 13 words &middot; 83 chars</span><span class="footer-tools"><span class="footer-tool" role="img" aria-label="Bulleted list" title="Bulleted list"><svg><use href="#icon-list"/></svg></span><span class="footer-tool" role="img" aria-label="Numbered list" title="Numbered list"><svg><use href="#icon-list-ordered"/></svg></span><span class="footer-tool" role="img" aria-label="Checklist" title="Checklist"><svg><use href="#icon-list-checks"/></svg></span></span><span class="footer-tool footer-settings" role="img" aria-label="Settings" title="Settings"><svg><use href="#icon-settings"/></svg></span></div>
+            </div>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="feature-section feature-section-dark" aria-labelledby="backup-title">
+      <div class="section-inner feature-layout feature-layout-reverse">
+        <div class="feature-copy">
+          <p class="feature-kicker">04 / Storage</p>
+          <h2 id="backup-title">Saved on your Mac. Copied to iCloud.</h2>
+          <p>Your editable pad files live in Application Support. BetterTot also keeps rolling snapshots in its own iCloud Drive folder. No BetterTot account or analytics.</p>
+        </div>
+        <figure class="feature-art">
+          <div class="feature-visual backup-visual" aria-label="BetterTot iCloud backup settings">
+            <div class="settings-traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="settings-shell">
+              <aside class="settings-sidebar">
+                <div class="settings-brand"><img src="assets/AppIcon.svg" alt=""><span><strong>BetterTot</strong><small>Settings</small></span></div>
+                <div class="settings-navigation" aria-label="Settings sections">
+                  <div class="settings-nav"><span class="nav-circle"><svg aria-hidden="true"><use href="#icon-settings"/></svg></span>General</div>
+                  <div class="settings-nav"><span class="nav-circle"><svg aria-hidden="true"><use href="#icon-circles-four"/></svg></span>Pads</div>
+                  <div class="settings-nav"><span class="nav-circle"><svg aria-hidden="true"><use href="#icon-pencil"/></svg></span>Editor</div>
+                  <div class="settings-nav active-storage"><span class="nav-circle"><svg aria-hidden="true"><use href="#icon-drive"/></svg></span>Storage</div>
+                  <div class="settings-nav"><span class="nav-circle"><svg aria-hidden="true"><use href="#icon-refresh"/></svg></span>Updates</div>
+                </div>
+              </aside>
+              <div class="settings-main">
+                <div class="settings-page-title"><span class="settings-header-icon"><svg aria-hidden="true"><use href="#icon-drive"/></svg></span><strong>Storage</strong></div>
+                <section class="settings-group" aria-label="iCloud Backup">
+                  <h4>iCloud Backup</h4>
+                  <div class="settings-row backup-status-row">
+                    <span class="settings-row-icon cloud"><svg aria-hidden="true"><use href="#icon-cloud"/></svg></span>
+                    <span class="settings-row-copy"><strong>Backup Status</strong><small>Your latest backup is stored in iCloud Drive.</small><span class="backup-meta"><span>Latest Backup <b>Aug 22, 2026 at 23:22</b></span><span>Size <b>6 KB</b></span></span></span>
+                  </div>
+                  <div class="backup-actions">
+                    <span class="settings-button"><svg aria-hidden="true"><use href="#icon-cloud-upload"/></svg>Back Up Now</span>
+                    <span class="settings-button"><svg aria-hidden="true"><use href="#icon-history"/></svg>Restore&hellip;</span>
+                    <span class="settings-button open-folder"><svg aria-hidden="true"><use href="#icon-folder"/></svg>Open in iCloud Drive</span>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="install-section" aria-labelledby="install-title">
+      <div class="section-inner install-inner">
+        <div class="install-intro">
+          <p class="feature-kicker">Unsigned release</p>
+          <h2 id="install-title">Install BetterTot in three steps.</h2>
+          <p>The app is ad-hoc signed, and its installer is unsigned and not notarized, so macOS may ask you to approve it once.</p>
+          <a class="button primary install-download" href="https://github.com/saaivignesh20/BetterTot/releases/latest">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 15V3m9 12v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10l5 5l5-5"/></g></svg>
+            <span>Download latest release</span>
+          </a>
+        </div>
+        <ol class="install-steps">
+          <li><span class="step-number">1</span><div><strong>Download both files</strong><p>Get the `.pkg` installer and `.sha256` checksum from the latest release.</p></div></li>
+          <li><span class="step-number">2</span><div><strong>Check the package</strong><p>Run <code>shasum -a 256 BetterTot-*.pkg</code> and match the result with the checksum file.</p></div></li>
+          <li><span class="step-number">3</span><div><strong>Open the installer</strong><p>If macOS blocks it, use <b>System Settings &gt; Privacy &amp; Security &gt; Open Anyway</b>. Keep Gatekeeper enabled.</p></div></li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="section-inner footer-inner">
+      <p>Open source under Apache 2.0.</p>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/saaivignesh20/BetterTot/blob/main/docs/PRIVACY.md">Privacy</a>
+        <a href="https://github.com/saaivignesh20/BetterTot/blob/main/CONTRIBUTION.md">Contribute</a>
+        <a href="https://github.com/saaivignesh20/BetterTot/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script type="module">
+    import { totalReleaseDownloads } from "./downloads.js";
+
+    const starCount = document.querySelector("#github-stars");
+    const githubLink = document.querySelector(".source-link");
+    const downloadCount = document.querySelector("#github-downloads");
+    fetch("https://api.github.com/repos/saaivignesh20/BetterTot")
+      .then((response) => {
+        if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+        return response.json();
+      })
+      .then(({ stargazers_count: count }) => {
+        if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid GitHub star count");
+        starCount.textContent = new Intl.NumberFormat("en", { notation: "compact" }).format(count);
+        githubLink.setAttribute("aria-label", `BetterTot on GitHub, ${count} stars`);
+      })
+      .catch((error) => console.warn("Could not refresh GitHub stars:", error));
+
+    fetch("https://api.github.com/repos/saaivignesh20/BetterTot/releases?per_page=100")
+      .then((response) => {
+        if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+        return response.json();
+      })
+      .then(totalReleaseDownloads)
+      .then((count) => {
+        downloadCount.textContent = new Intl.NumberFormat("en", { notation: "compact" }).format(count);
+      })
+      .catch((error) => console.warn("Could not refresh GitHub downloads:", error));
+  </script>
+</body>
+</html>

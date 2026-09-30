@@ -1,0 +1,480 @@
+---
+import Site from '../layouts/Site.astro';
+import Note, { type Task } from './Note.astro';
+import Palette from './Palette.astro';
+import Icon from './Icon.astro';
+import { site, release, features, shortcuts, faqs, welcomeTasks, weekTasks, groceryTasks, agentTasks, agentChat, mcpClients } from '../data/site';
+import { competitors, comparePath } from '../data/compare';
+
+const id = (name: string) => `${site.url}/#${name}`;
+const ogImage = { '@type': 'ImageObject', url: `${site.url}/og.png`, width: 1200, height: 630 };
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    { '@type': 'Person', '@id': id('author'), name: site.author.name, url: site.author.url, sameAs: [site.author.github] },
+    { '@type': 'WebSite', '@id': id('website'), url: `${site.url}/`, name: site.name, description: site.description, inLanguage: 'en', publisher: { '@id': id('author') } },
+    {
+      '@type': 'WebPage',
+      '@id': id('webpage'),
+      url: `${site.url}/`,
+      name: site.title,
+      description: site.description,
+      inLanguage: 'en',
+      isPartOf: { '@id': id('website') },
+      about: { '@id': id('app') },
+      primaryImageOfPage: ogImage,
+      dateModified: release?.date,
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': id('app'),
+      name: site.name,
+      url: `${site.url}/`,
+      description: site.summary,
+      applicationCategory: 'DesktopEnhancementApplication',
+      applicationSubCategory: 'To-do list',
+      operatingSystem: 'macOS',
+      softwareRequirements: 'macOS 14 Sonoma or later',
+      softwareVersion: release?.version,
+      dateModified: release?.date,
+      downloadUrl: site.download,
+      releaseNotes: site.changelog,
+      license: 'https://opensource.org/licenses/MIT',
+      isAccessibleForFree: true,
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      image: `${site.url}/icon.png`,
+      screenshot: ogImage,
+      featureList: features.map((f) => f.title),
+      keywords: site.keywords.join(', '),
+      author: { '@id': id('author') },
+      publisher: { '@id': id('author') },
+      sameAs: [site.repo, site.productHunt.split('?')[0]],
+    },
+    {
+      '@type': 'FAQPage',
+      '@id': id('faq'),
+      isPartOf: { '@id': id('webpage') },
+      mainEntity: faqs.map((f) => ({ '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } })),
+    },
+  ],
+};
+
+const tripTasks: Task[] = [
+  { t: 'Plan the trip' },
+  { t: 'Book flights', l: 1, done: true },
+  { t: 'Find a hotel near the <strong>old town</strong>', l: 1 },
+  { t: 'Shortlist three', l: 2, done: true },
+  { t: 'Read the <a href="#subtasks">reviews</a>', l: 2 },
+  { t: 'Pack\n<em>charger, passport, adapter</em>', editing: true, hint: ['⇧⇥', 'nest'] },
+];
+const imageTasks: Task[] = [
+  { t: 'Fix the <strong>Sign in</strong> button', img: '/paste-demo.svg', imgHover: true },
+  { t: 'Update the <strong>App Store</strong> screenshots' },
+  { t: 'Reply to design feedback', done: true },
+];
+const tidyTasks: Task[] = [
+  { t: 'Oat milk' },
+  { t: 'Coffee beans' },
+  { t: 'Lemons ×3' },
+  { t: 'Sourdough', done: true },
+  { t: 'Eggs', done: true },
+];
+const colors = [
+  ['yellow', 'Yellow', '#ffe675'],
+  ['pink', 'Pink', '#ffc7d6'],
+  ['blue', 'Blue', '#b3dbff'],
+  ['green', 'Green', '#c2edbd'],
+  ['purple', 'Purple', '#d6c9f7'],
+  ['graphite', 'Graphite', '#dbdee6'],
+];
+
+const lede = 'Tic puts each list in its own sticky note on your Mac desktop, so what you need to do stays in view. Tick things off, drag notes where you want them, and get back to work.';
+const btn = 'inline-flex items-center gap-2 bg-accent px-5 py-3 font-semibold text-on-accent transition hover:brightness-110 rounded-xl justify-center';
+const btnGhost = 'inline-flex items-center gap-2 px-5 py-3 font-semibold ring-1 ring-line transition hover:bg-surface rounded-xl justify-center';
+const h2 = 'font-display text-[clamp(2rem,4.5vw,3.25rem)] leading-[1.04] tracking-[-0.025em] text-balance font-extrabold';
+const panel = 'relative grid place-items-center overflow-hidden rounded-2xl px-4 py-8 bg-surface ring-1 ring-line sm:min-h-[22rem] sm:rounded-3xl sm:p-10';
+const kbd = 'inline-grid min-w-8 place-items-center rounded-md bg-surface px-2 py-1 font-sans text-sm font-medium ring-1 ring-line shadow-[0_1px_0_var(--line)]';
+---
+
+<Site jsonLd={jsonLd}>
+    <section class="mx-auto grid max-w-6xl items-center gap-10 px-5 pb-14 pt-6 sm:pb-24 sm:pt-8 lg:grid-cols-[1.1fr_1fr] lg:gap-14 lg:pt-16">
+      <div>
+        <p aria-hidden="true" class="headline-line flex items-center gap-3 font-display text-[clamp(1.25rem,2.6vw,2rem)] font-bold text-muted" data-done>
+          <span class="tick"><Icon name="check-circle-fill" /></span>
+          <s class="decoration-2">Lists hidden in the menu bar</s>
+        </p>
+        <h1 class="headline-line mt-4 flex items-start gap-2 font-display text-[clamp(2.6rem,6.4vw,5rem)] font-extrabold leading-[0.95] tracking-[-0.035em] text-balance sm:gap-4">
+          <button type="button" data-tick class="tick" aria-label="Tick it off">
+            <Icon name="circle" class="off" /><Icon name="check-circle-fill" class="on" />
+          </button>
+          <span>To-do lists that live on your Mac desktop</span>
+        </h1>
+        <p class="mt-5 max-w-xl leading-relaxed text-muted text-pretty sm:mt-7 sm:text-lg">{lede}</p>
+        <div class="mt-7 flex flex-wrap gap-3 sm:mt-9">
+          <a href={site.download} class:list={[btn, 'max-sm:w-full']}><Icon name="download-simple" class="size-5" />Download for Mac</a>
+          <a href={site.repo} class:list={[btnGhost, 'max-sm:w-full']}><Icon name="github-logo" class="size-5" />View source on GitHub</a>
+        </div>
+        <a href="#agents" class="group mt-6 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3.5 py-1.5 text-sm font-semibold text-accent ring-1 ring-accent/20 transition hover:bg-accent/15 max-sm:w-full max-sm:justify-center">
+          <Icon name="sparkle-fill" class="size-4" />New — let Claude, Cursor &amp; AI agents draft your lists
+          <Icon name="arrow-right" class="size-4 transition group-hover:translate-x-0.5" />
+        </a>
+        <p class="mt-5 text-sm text-muted">Free and open source{release && `, version ${release.version}`}. Needs macOS 14 Sonoma or later.</p>
+        <a href={site.productHunt} target="_blank" rel="noopener" class="mt-6 flex w-fit max-sm:mx-auto">
+          <img src="https://api.producthunt.com/widgets/embed-image/v1/follow.svg?product_id=1317575&theme=light" alt="Tic - To-do lists that live on your desktop, not in a menu bar | Product Hunt" width="250" height="54" decoding="async" />
+        </a>
+      </div>
+      <div class="relative mx-auto w-full max-w-[34rem] sm:h-[33rem]">
+        <Note class="max-sm:hidden sm:absolute sm:right-0 sm:top-0" title="This week" color="pink" tasks={weekTasks} quick={false} width="15.5em" />
+        <Note class="relative z-10 max-sm:[--w:100%]! sm:absolute sm:left-0 sm:top-10" title="Welcome to Tic 👋" tasks={welcomeTasks} revealed interactive width="22em" />
+        <Note class="relative z-20 -mt-12 ml-auto max-sm:[--w:65%]! sm:absolute sm:bottom-14 sm:right-2 sm:mt-0" title="Groceries" color="blue" tasks={groceryTasks} interactive quickHint width="15.5em" />
+        <Note class="z-20 max-sm:hidden sm:absolute sm:bottom-0 sm:left-10" title="Someday" color="graphite" collapsed count={12} width="18em" />
+      </div>
+    </section>
+
+    <section id="features" class="mx-auto max-w-6xl scroll-mt-8 px-5 py-12 sm:py-20">
+      <h2 class:list={[h2, 'max-w-3xl']}>A to-do list you can see without going looking for it</h2>
+      <div class="mt-10 flex flex-col gap-14 sm:mt-16 sm:gap-24">
+        {features.map((f, i) => (
+          f.id === 'agents' ? (
+            <div id="agents" data-agent class="scroll-mt-8">
+              <p class="anim inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent ring-1 ring-accent/20" style="--i:0">
+                <Icon name="sparkle" class="size-4" />New — works with AI agents
+              </p>
+              <h3 class="anim mt-4 font-display text-[clamp(1.5rem,2.6vw,2rem)] leading-tight tracking-[-0.02em] font-bold" style="--i:1">{f.title}</h3>
+              <p class="anim mt-3 max-w-2xl leading-relaxed text-muted sm:mt-4 sm:text-lg" style="--i:2">{f.body}</p>
+
+              <div data-demo class="mt-8 grid items-start gap-6 sm:mt-10 lg:grid-cols-[1fr_1.02fr] lg:gap-12">
+                <figure class="anim overflow-hidden rounded-2xl bg-[#1e2027] shadow-2xl ring-1 ring-black/20" style="--i:2">
+                  <figcaption class="flex items-center gap-2 border-b border-white/10 px-4 py-3">
+                    <span class="grid size-6 place-items-center rounded-md bg-accent/20 text-accent"><Icon name="robot" class="size-4" /></span>
+                    <span class="text-sm font-medium text-white/80">Your AI agent</span>
+                    <span class="ml-auto flex items-center gap-1.5 text-xs text-white/40"><span class="size-2 rounded-full bg-[#28c840]" />connected to Tic</span>
+                  </figcaption>
+                  <div class="chat-log flex min-h-[15rem] flex-col gap-2.5 p-4 text-[13px] leading-relaxed sm:min-h-[16rem] sm:p-5">
+                    {agentChat.map((turn, i) => (
+                      turn.who === 'user' ? (
+                        <p class="msg max-w-[85%] self-end rounded-2xl rounded-br-sm bg-accent px-3.5 py-2 text-on-accent" style={`--i:${i}`} data-who="user">{turn.text}</p>
+                      ) : turn.who === 'agent' ? (
+                        <p class="msg relative max-w-[85%] self-start rounded-2xl rounded-bl-sm bg-white/10 px-3.5 py-2 text-white/85" style={`--i:${i}`} data-who="agent">
+                          <span class="msg-body">{turn.text}</span>
+                          <span class="msg-typing" aria-hidden="true"><i /><i /><i /></span>
+                        </p>
+                      ) : (
+                        <p class="msg relative max-w-[92%] self-start rounded-xl bg-white/[0.06] px-3 py-2 text-[12.5px] ring-1 ring-white/10" style={`--i:${i}`} data-who="tool" data-reveal={turn.reveal?.join(',')} data-tick={turn.tick || undefined}>
+                          <span class="msg-body flex items-center gap-2">
+                            <img src="/icon.png" alt="" width="18" height="18" class="size-[18px] shrink-0 rounded-[5px]" />
+                            <span class="font-medium text-white/90">Tic</span>
+                            <span class="text-white/25">·</span>
+                            <span class="text-white/70">{turn.label}</span>
+                          </span>
+                          <span class="msg-typing" aria-hidden="true"><i /><i /><i /></span>
+                        </p>
+                      )
+                    ))}
+                  </div>
+                  <div class="flex items-center gap-2 border-t border-white/10 p-3">
+                    <div class="flex min-h-9 flex-1 items-center rounded-xl bg-white/[0.06] px-3 py-1.5 text-[13px] ring-1 ring-white/10">
+                      <span class="chat-typed whitespace-pre-wrap text-white/85"></span><span class="chat-caret inline-block h-[1.1em] w-px translate-y-[0.15em] bg-accent"></span>
+                      <span class="chat-ph text-white/35">Message your agent…</span>
+                    </div>
+                    <span class="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-on-accent" aria-hidden="true"><Icon name="arrow-up" class="size-4" /></span>
+                  </div>
+                </figure>
+
+                <div class="anim lg:pt-2" style="--i:3">
+                  <div class="desk-stage flex justify-center rounded-[1.4rem] p-6 ring-1 ring-black/5 sm:p-10">
+                    <Note id="agent-note" title="Kyoto trip 🗾" color="green" tasks={agentTasks} interactive quick="Ask your agent…" width="20em" style="font-size:14px" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="anim mt-8 sm:mt-10" style="--i:8">
+                <p class="text-sm font-medium text-muted">Set it up once for the client you use</p>
+                <ul class="mt-4 flex flex-wrap gap-2.5">
+                  {mcpClients.map((c) => (
+                    <li class="inline-flex items-center gap-2 rounded-full bg-surface px-3.5 py-1.5 text-sm font-medium ring-1 ring-line">
+                      <Icon name={c.icon} class="size-4 text-muted" />{c.name}
+                    </li>
+                  ))}
+                </ul>
+                <p class="mt-5 max-w-2xl text-sm text-muted">
+                  Open <span class="font-medium text-fg">AI Agents (MCP)…</span> from the menu bar, flip it on, and copy the setup for your client — or add Cursor and VS Code in one click. It’s off by default and runs entirely on your Mac.
+                </p>
+              </div>
+            </div>
+          ) : (
+          <article id={f.id} class="grid scroll-mt-8 items-center gap-6 lg:grid-cols-2 lg:gap-16">
+            <div class:list={['max-w-lg', { 'lg:order-2': i % 2 }]}>
+              <h3 class="font-display text-[clamp(1.5rem,2.6vw,2rem)] leading-tight tracking-[-0.02em] font-bold">{f.title}</h3>
+              <p class="mt-3 leading-relaxed text-muted sm:mt-4 sm:text-lg">{f.body}</p>
+            </div>
+
+            {f.id === 'float' && (
+              <div class={panel}>
+                <div class="flex flex-col items-center gap-3">
+                  <Note title="This week" color="pink" tasks={weekTasks} revealed pinned quick={false} width="19em" style="font-size:14px" />
+                  <Note title="Reading list" color="purple" collapsed count={4} width="19em" style="font-size:14px" />
+                  <Note title="Someday" color="graphite" collapsed count={12} width="19em" style="font-size:14px" />
+                </div>
+              </div>
+            )}
+
+            {f.id === 'subtasks' && (
+              <div class={panel}>
+                <Note title="Rome weekend" color="green" tasks={tripTasks} addSub={{ after: 4, level: 1 }} interactive quick={false} width="21em" style="font-size:14px" />
+              </div>
+            )}
+
+            {f.id === 'images' && (
+              <div class={panel}>
+                <Note title="Launch" color="purple" tasks={imageTasks} revealed quick={false} width="21em" style="font-size:14px" />
+              </div>
+            )}
+
+            {f.id === 'look' && (
+              <div class={panel} style="background: var(--wallpaper)">
+                <div class="flex flex-col items-center gap-6">
+                  <Note id="look-note" title="Groceries" color="blue" material="glass" tasks={groceryTasks} interactive quick={false} width="17em" style="font-size:14px" />
+                  <div class="flex flex-wrap items-center justify-center gap-4 rounded-2xl bg-white/60 px-4 py-3 text-black shadow-lg ring-1 ring-black/5 backdrop-blur-xl">
+                    <div role="group" aria-label="Note colour" class="flex gap-2">
+                      {colors.map(([id, name, fill]) => (
+                        <button type="button" data-set={`color=${id}`} data-target="look-note" aria-pressed={id === 'blue' ? 'true' : 'false'} aria-label={name} title={name} class="size-7 rounded-full ring-1 ring-black/15 transition aria-pressed:ring-[2.5px] aria-pressed:ring-black/60" style={`background:${fill}`} />
+                      ))}
+                    </div>
+                    <div role="group" aria-label="Note material" class="flex rounded-full bg-black/5 p-1 text-sm font-medium">
+                      <button type="button" data-set="material=solid" data-target="look-note" aria-pressed="false" class="rounded-full px-3 py-1 aria-pressed:bg-white aria-pressed:shadow">Solid</button>
+                      <button type="button" data-set="material=glass" data-target="look-note" aria-pressed="true" class="rounded-full px-3 py-1 aria-pressed:bg-white aria-pressed:shadow">Glass</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {f.id === 'search' && (
+              <div class={panel} style="background: var(--wallpaper)">
+                <Palette class="text-[12px] sm:text-[13px]" />
+              </div>
+            )}
+
+            {f.id === 'tidy' && (
+              <div class={panel}>
+                <div class="relative pt-2 sm:-translate-x-14">
+                  <Note title="Groceries" color="yellow" tasks={tidyTasks} revealed quick={false} width="19em" style="font-size:14px" />
+                  <div class="z-10 w-60 max-sm:mt-3 max-sm:w-full sm:absolute sm:left-[9.5rem] sm:top-[4.6rem] rounded-xl bg-white/90 p-3.5 text-[13px] text-black/85 shadow-xl ring-1 ring-black/10 backdrop-blur-xl" aria-hidden="true">
+                    <div class="flex items-center justify-between py-1">Hide completed <span class="h-4 w-7 rounded-full bg-black/15 p-0.5"><span class="block size-3 rounded-full bg-white shadow" /></span></div>
+                    <div class="mt-2 flex items-center justify-between py-1">Move completed to bottom <span class="flex h-4 w-7 justify-end rounded-full bg-[#c79e1a] p-0.5"><span class="block size-3 rounded-full bg-white shadow" /></span></div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {f.id === 'private' && (
+              <div class={panel}>
+                <figure class="w-full max-w-md overflow-hidden rounded-2xl bg-[#1e2027] text-left text-[11.5px] text-white/85 sm:text-[13px] shadow-2xl ring-1 ring-black/20">
+                  <div class="flex gap-2 px-4 py-3" aria-hidden="true"><span class="size-3 rounded-full bg-[#ff5f57]" /><span class="size-3 rounded-full bg-[#febc2e]" /><span class="size-3 rounded-full bg-[#28c840]" /></div>
+                  <pre class="whitespace-pre-wrap break-all px-4 pb-4 font-mono leading-relaxed sm:px-5 sm:pb-5"><code><span class="text-white/45">$</span> sqlite3 ~/Library/Application\ Support/Tic/tic.sqlite \
+    "SELECT title FROM note;"
+Welcome to Tic 👋
+Ship v0.4
+Groceries</code></pre>
+                  <figcaption class="sr-only">Reading Tic’s local database with the sqlite3 command</figcaption>
+                </figure>
+              </div>
+            )}
+          </article>
+          )
+        ))}
+      </div>
+    </section>
+
+    <section id="shortcuts" class="scroll-mt-8 border-y border-line bg-surface/60 py-12 sm:py-20">
+      <div class="mx-auto grid max-w-6xl gap-8 px-5 lg:grid-cols-[1fr_1.3fr] lg:gap-12">
+        <div>
+          <h2 class={h2}>Keep your hands on the keyboard</h2>
+          <p class="mt-5 max-w-md text-lg leading-relaxed text-muted">Tic shows the shortcut you need right in the field while you type, so you don’t have to memorise this list.</p>
+        </div>
+        <dl class="divide-y divide-line">
+          {shortcuts.map((s) => (
+            <div class="flex items-center justify-between gap-4 py-3 sm:py-4">
+              <dt class="sm:text-lg">{s.action}</dt>
+              <dd class="flex shrink-0 gap-1.5">{s.keys.map((k) => <kbd class={kbd}>{k}</kbd>)}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </section>
+
+    <section id="install" class="mx-auto max-w-6xl scroll-mt-8 px-5 py-12 sm:py-20">
+      <h2 class={h2}>Install Tic</h2>
+      <ol class="mt-8 grid gap-8 sm:mt-12 md:grid-cols-3 md:gap-10">
+        <li>
+          <h3 class="text-lg font-semibold">1. Download</h3>
+          <p class="mt-2 text-muted">Get the <code class="text-fg">.dmg</code> or <code class="text-fg">.zip</code> from the <a href={site.download} class="text-fg underline underline-offset-4">latest release on GitHub</a> and move Tic.app to Applications.</p>
+        </li>
+        <li>
+          <h3 class="text-lg font-semibold">2. Allow it to open</h3>
+          <p class="mt-2 text-muted">Tic isn’t notarized yet, so clear the quarantine flag once in Terminal:</p>
+          <div class="mt-3 flex items-center gap-2 rounded-xl bg-[#1e2027] py-2 pl-4 pr-2 font-mono text-sm text-white">
+            <code class="flex-1 overflow-x-auto whitespace-nowrap">xattr -c /Applications/Tic.app</code>
+            <button type="button" data-copy="xattr -c /Applications/Tic.app" class="rounded-lg bg-white/10 px-3 py-1.5 font-sans text-xs font-semibold hover:bg-white/20">Copy</button>
+          </div>
+        </li>
+        <li>
+          <h3 class="text-lg font-semibold">3. Make your first list</h3>
+          <p class="mt-2 text-muted">Open Tic and press <kbd class={kbd}>⌘</kbd> <kbd class={kbd}>N</kbd>. Turn on Launch at Login from the menu bar icon to keep your notes there after a restart.</p>
+        </li>
+      </ol>
+
+      {release && release.notes.length > 0 && (
+        <div class="mt-12 rounded-2xl bg-surface p-6 ring-1 ring-line sm:mt-16 sm:rounded-3xl sm:p-8">
+          <h3 class="font-display text-2xl tracking-tight font-bold">What’s new in {release.version}</h3>
+          <p class="mt-1 text-sm text-muted">Released <time datetime={release.date}>{new Date(release.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</time></p>
+          <ul class="mt-4 list-disc space-y-1 pl-5">{release.notes.map((n) => <li>{n}</li>)}</ul>
+          <a href={site.changelog} class="mt-4 inline-block text-sm font-semibold underline underline-offset-4">Read the full changelog</a>
+        </div>
+      )}
+    </section>
+
+    <section id="faq" class="mx-auto max-w-3xl scroll-mt-8 px-5 py-12 sm:py-20">
+      <h2 class={h2}>Questions</h2>
+      <div class="mt-10 divide-y divide-line border-y border-line">
+        {faqs.map((f) => (
+          <details class="group py-5">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-6 font-medium sm:text-lg">
+              {f.q}
+              <Icon name="plus" class="size-5 shrink-0 text-muted transition group-open:rotate-45" />
+            </summary>
+            <p class="mt-3 leading-relaxed text-muted">{f.a}</p>
+          </details>
+        ))}
+      </div>
+      <p class="mt-6 text-muted">
+        Coming from {competitors.map((c, i) => <>{i > 0 && (i === competitors.length - 1 ? ' or ' : ', ')}<a href={comparePath(c)} class="text-fg underline underline-offset-4">{c.name}</a></>)}? See how Tic compares.
+      </p>
+    </section>
+
+    <section class="px-5 py-16 text-center sm:py-24">
+      <img src="/icon.png" alt="Tic app icon" width="112" height="112" loading="lazy" class="mx-auto size-28" />
+      <h2 class:list={[h2, 'mx-auto mt-6 max-w-2xl']}>Put your next list on the desktop</h2>
+      <div class="mt-8 flex flex-wrap justify-center gap-3">
+        <a href={site.download} class:list={[btn, 'max-sm:w-full']}><Icon name="download-simple" class="size-5" />Download for Mac</a>
+        <a href={site.repo} class:list={[btnGhost, 'max-sm:w-full']}><Icon name="github-logo" class="size-5" />Star on GitHub</a>
+      </div>
+    </section>
+</Site>
+
+<script>
+  document.addEventListener('click', (event) => {
+    const target = event.target as Element;
+
+    const check = target.closest('button.cb, button[data-tick]');
+    if (check) {
+      const row = check.closest('.task, .headline-line')!;
+      const done = !row.hasAttribute('data-done');
+      row.toggleAttribute('data-done', done);
+      check.setAttribute('aria-pressed', String(done));
+      return;
+    }
+
+    const setter = target.closest<HTMLElement>('[data-set]');
+    if (setter) {
+      const [key, value] = setter.dataset.set!.split('=');
+      document.getElementById(setter.dataset.target!)!.dataset[key] = value;
+      setter.parentElement!.querySelectorAll('[data-set]').forEach((b) => b.setAttribute('aria-pressed', String(b === setter)));
+      return;
+    }
+
+    const copy = target.closest<HTMLButtonElement>('[data-copy]');
+    if (copy) {
+      navigator.clipboard.writeText(copy.dataset.copy!).then(() => {
+        copy.textContent = 'Copied';
+        setTimeout(() => (copy.textContent = 'Copy'), 1500);
+      });
+    }
+  });
+
+  // AI-agents section: a looping demo of a person talking to their agent while a Tic note fills in.
+  // Reduced motion / no JS keep the finished conversation static (CSS shows everything).
+  const agents = document.getElementById('agents');
+  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (agents && !calm) {
+    agents.setAttribute('data-play', ''); // reveal the framing (badge/heading/cards)
+    const msgs = [...agents.querySelectorAll<HTMLElement>('.msg')];
+    const rows = [...agents.querySelectorAll<HTMLElement>('#agent-note .task')];
+    const typed = agents.querySelector<HTMLElement>('.chat-typed');
+    const placeholder = agents.querySelector<HTMLElement>('.chat-ph');
+    const cascade = rows.slice(0, 3); // Flights + its two legs
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const setDone = (task: Element, done: boolean) => {
+      task.toggleAttribute('data-done', done);
+      task.querySelector('.cb')?.setAttribute('aria-pressed', String(done));
+    };
+    // Type text into the chatbox one character at a time, then hold it briefly. Stops if retired.
+    async function typeInto(text: string, my: number) {
+      if (!typed) return;
+      placeholder?.classList.add('hidden');
+      for (let i = 0; i < text.length; i++) { if (my !== token) return; typed.textContent = text.slice(0, i + 1); await sleep(34 + Math.random() * 42); }
+      await sleep(450);
+    }
+    const clearBox = () => { if (typed) typed.textContent = ''; placeholder?.classList.remove('hidden'); };
+
+    // A cancellation token. Every run captures the current value; bumping it retires that run so a
+    // re-entry (scroll away and back) can never leave two timelines mutating the note at once —
+    // which is what made the reveals land out of order.
+    let token = 0;
+    const live = (my: number) => my === token;
+    const reset = () => {
+      msgs.forEach((m) => m.classList.remove('in', 'pending'));
+      rows.forEach((r) => { r.classList.remove('in'); setDone(r, false); });
+      clearBox();
+    };
+
+    async function cycle(my: number) {
+      reset();
+      await sleep(700); if (!live(my)) return;
+      for (const msg of msgs) {
+        if (!live(my)) return;
+        if (msg.dataset.who === 'user') {
+          // The person types their message into the chatbox, then it sends up into the log.
+          await typeInto(msg.textContent || '', my); if (!live(my)) return;
+          clearBox();
+          msg.classList.add('in');
+          await sleep(500);
+          continue;
+        }
+        // The agent "types" in the bubble's own slot (dots → text, no layout shift).
+        msg.classList.add('in', 'pending');
+        await sleep(700); if (!live(my)) return;
+        msg.classList.remove('pending');
+        // A tool call fills in the note rows it names, in order.
+        if (msg.dataset.reveal) {
+          for (const idx of msg.dataset.reveal.split(',')) { if (!live(my)) return; rows[+idx]?.classList.add('in'); await sleep(260); }
+        }
+        // The "done" message ticks Flights and both legs.
+        if (msg.dataset.tick !== undefined) {
+          cascade.forEach((task, i) => setTimeout(() => { if (live(my)) setDone(task, true); }, i * 260));
+        }
+        await sleep(msg.dataset.reveal ? 500 : 900);
+      }
+      await sleep(3200); // hold the finished note, then loop
+    }
+
+    async function loop() {
+      const my = token;
+      while (live(my)) await cycle(my);
+    }
+
+    // Only animate while the section is on screen; each visibility change retires the old run first.
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries.some((e) => e.isIntersecting);
+        token++;                 // retire whatever was running
+        if (visible) loop();     // start one fresh run
+        else reset();
+      }, { threshold: 0.25 });
+      observer.observe(agents);
+    } else {
+      loop();
+    }
+  }
+</script>

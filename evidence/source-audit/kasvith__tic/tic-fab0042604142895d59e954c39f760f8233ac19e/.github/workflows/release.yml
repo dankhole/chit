@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Package Tic.app
+        run: VERSION="${GITHUB_REF_NAME#v}" ./scripts/package.sh
+
+      - name: Zip the app
+        run: ditto -c -k --keepParent dist/Tic.app "dist/Tic-${GITHUB_REF_NAME}.zip"
+
+      - name: Build DMG
+        run: |
+          STAGING="$(mktemp -d)"
+          cp -R dist/Tic.app "$STAGING/Tic.app"
+          ln -s /Applications "$STAGING/Applications"   # drag-to-install layout
+          hdiutil create -volname "Tic" -srcfolder "$STAGING" -ov -format UDZO \
+            "dist/Tic-${GITHUB_REF_NAME}.dmg"
+
+      - name: Ensure release notes are non-empty
+        run: '[ -s RELEASE_NOTES.md ] || echo "Release ${GITHUB_REF_NAME}" > RELEASE_NOTES.md'
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Tic ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/Tic-${{ github.ref_name }}.dmg
+            dist/Tic-${{ github.ref_name }}.zip
+
+  changelog:
+    name: Update CHANGELOG.md
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Regenerate CHANGELOG.md
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+        env:
+          OUTPUT: CHANGELOG.md
+
+      - name: Commit CHANGELOG.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if ! git diff --staged --quiet; then
+            git commit -m "docs(changelog): update for ${GITHUB_REF_NAME} [skip ci]"
+            git push origin main
+          fi
+
+      # The site's "What's new" reads CHANGELOG.md at build time, and the commit above carries
+      # [skip ci], so ask Cloudflare Pages for a fresh build. Set the CF_DEPLOY_HOOK secret to the
+      # deploy hook URL (Pages project → Settings → Builds → Deploy hooks).
+      - name: Redeploy the site
+        env:
+          CF_DEPLOY_HOOK: ${{ secrets.CF_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$CF_DEPLOY_HOOK" ]; then echo "CF_DEPLOY_HOOK secret not set; skipping"; exit 0; fi
+          curl -fsS -X POST "$CF_DEPLOY_HOOK" >/dev/null && echo "Cloudflare deploy triggered"

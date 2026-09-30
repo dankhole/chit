@@ -1,0 +1,729 @@
+# BetterTot Specification
+
+## Status
+
+BetterTot is a private/local native macOS menu-bar scratchpad. The
+current implementation provides seven fixed plain-text pads, a custom
+nonactivating AppKit panel, local-first file storage, crash recovery, rolling
+backups, import/export, settings, and a configurable global shortcut.
+
+This document describes the repository as implemented, not a future product
+roadmap.
+
+## Product Goals
+
+- Provide a fast, always-available scratchpad from the macOS menu bar.
+- Keep all user note data local, plain-text, and readable outside the app.
+- Preserve acknowledged edits through crashes, process kills, and metadata
+  corruption whenever the filesystem permits it.
+- Avoid accounts, background network services, analytics, telemetry, and
+  proprietary data formats.
+- Support predictable keyboard-first use across seven fixed pad slots.
+
+## Non-Goals
+
+- BetterTot is not an RTF editor. Pads remain portable plain-text Markdown.
+- BetterTot is not a live-syncing app. iCloud Drive carries rolling backups,
+  but active pads remain local and have no multi-device merge behavior.
+- BetterTot is not an encrypted vault. Stored files rely on the user's normal
+  macOS account, permissions, FileVault, and backup configuration.
+- BetterTot is not a document-based macOS app. It runs as an accessory
+  menu-bar application.
+
+## Platform and Packaging
+
+- Language: Swift.
+- Build system: Swift Package Manager.
+- Minimum platform: macOS 13.
+- Package targets:
+  - `BetterTot`: executable target.
+  - `BetterTotTests`: XCTest test target.
+- Third-party dependencies: none.
+- Apple frameworks used by the implementation include AppKit, Carbon,
+  ServiceManagement, and UniformTypeIdentifiers.
+
+Primary commands:
+
+```sh
+swift run
+swift test
+scripts/bundle.sh
+scripts/build-and-install.sh
+scripts/test.sh
+scripts/release.sh
+```
+
+`scripts/bundle.sh` builds a universal arm64/x86_64 release binary, creates
+`dist/BetterTot.app`, writes a versioned `Info.plist`, sets `LSUIElement` for
+menu-bar behavior, and signs the bundle. Its default ad-hoc signature is for
+local use; a Developer ID identity enables Hardened Runtime and timestamped
+signing. Launch-at-login support is only enabled when BetterTot is running from
+an app bundle.
+
+`scripts/build-and-install.sh` is the local package-and-update routine. It
+builds `dist/BetterTot.app`, creates the matching versioned `.pkg`, validates
+the bundle identifier and signature, stages a replacement on the destination
+filesystem, quits the running app, atomically swaps `/Applications/BetterTot.app`,
+verifies the installed copy, and relaunches it. A failed validation or staged
+replacement preserves the existing installation. The routine never modifies
+Application Support data. Release and CI artifact generation do not invoke it.
+
+`scripts/release.sh` runs the tests and creates a versioned ZIP, unsigned macOS
+installer package, and shared SHA-256 checksum. The app inside both artifacts
+is ad-hoc signed. This is the completed path for the current private/local
+scope. A matching version tag runs the same build in CI and stores it as a
+repository-scoped Actions artifact. The tag workflow does not use Apple
+credentials, notarize the app or installer, create a GitHub Release, or publish
+a Homebrew Cask.
+
+## Repository Layout
+
+```text
+Package.swift                         SwiftPM package manifest
+README.md                             Project overview and quick start
+CONTRIBUTION.md                       Development and contribution workflow
+SECURITY.md                           Vulnerability reporting policy
+SPEC.md                               This implementation specification
+PLAN.md                               Original product and engineering plan
+VERSION                               Release marketing version
+Assets/MenuBarIcon.png                Material note-stack status-item artwork
+docs/MANUAL_TESTING.md                Manual app acceptance checklist
+docs/PRIVACY.md                       Privacy and local-storage notes
+docs/RELEASE.md                       Local and tagged-build release runbook
+scripts/bundle.sh                     Universal app bundle builder
+scripts/build-and-install.sh          Local package, install, and relaunch routine
+scripts/install-local.sh              Validated staged application replacement
+scripts/package-installer.sh          Unsigned /Applications installer builder
+scripts/release.sh                    ZIP, installer, checksum, and verification
+scripts/verify-release.sh             Artifact integrity and signature checks
+.github/workflows/*.yml               CI and read-only tagged-build automation
+Sources/BetterTot/App.swift           App entry point
+Sources/BetterTot/AppDelegate.swift   Launch, status item, menu, termination
+Sources/BetterTot/PanelController.swift
+                                      Panel behavior, editor, pad switching
+Sources/BetterTot/CheckboxTextView.swift
+                                      Markdown projection, native checkbox
+                                      attachments, and coordinate mapping
+Sources/BetterTot/PanelView.swift     Panel controls, layout, and status footer
+Sources/BetterTot/PadCustomization.swift
+                                      Shared pad customization contract and colors
+Sources/BetterTot/PadCustomizationView.swift
+                                      Pad selector, name field, and color swatches
+Sources/BetterTot/Model.swift         Codable data model
+Sources/BetterTot/WorkspaceStore.swift
+                                      Actor-isolated persistence and recovery
+Sources/BetterTot/Backups.swift       Backup, export-all, pruning logic
+Sources/BetterTot/ImportExport.swift  Menu-driven import/export/restore
+Sources/BetterTot/Shortcuts.swift     Shortcut model and Carbon hotkeys
+Sources/BetterTot/SettingsWindow.swift
+                                      Settings UI and UserDefaults bindings
+Sources/BetterTot/SettingsContentView.swift
+                                      Vertical navigation and settings page layout
+Sources/BetterTot/MenuBarIcon.swift    Template status-item icon
+Sources/BetterTot/UpdateChecker.swift Version parsing and manual release check
+Tests/BetterTotTests/*.swift          XCTest coverage
+```
+
+## Application Lifecycle
+
+1. `BetterTotApp.main()` creates `NSApplication.shared`, installs
+   `AppDelegate`, sets the activation policy to `.accessory`, and runs the app.
+2. `AppDelegate.applicationDidFinishLaunching` registers default preferences,
+   installs a minimal main menu, creates a `WorkspaceStore`, and loads storage.
+3. The app intentionally remains invisible until `WorkspaceStore.load()`
+   finishes directory setup, metadata repair, and journal recovery.
+4. After load, the app creates the menu-bar status item, `PanelController`,
+   status menu, and `CarbonGlobalShortcutService`.
+5. On termination, `applicationShouldTerminate` waits for `PanelController` to
+   flush all pad text and asks `WorkspaceStore` to mark a clean shutdown before
+   allowing the app to quit.
+
+## User Interface
+
+### Menu-Bar Item
+
+- Left-click toggles the scratchpad panel.
+- Right-click or Control-left-click opens the status menu.
+- The status item uses a custom monochrome template icon based on BetterTot's
+  stacked-note mark, with an accessibility description of "BetterTot
+  scratchpad".
+
+Status menu actions:
+
+- Import Into Current Pad
+- Export Current Pad
+- Export All Pads
+- Settings
+- Quit BetterTot
+
+The menu conditionally adds `iCloud Backup Needs Attention` when preflight
+cannot safely use the repository and `Update to BetterTot <version>` when an
+automatic release check finds a newer version. Backup and restore commands live
+only in Settings.
+
+### Scratchpad Panel
+
+The editor is a borderless, floating, nonactivating `NSPanel` containing:
+
+- A compact header with Close, seven independent colored pad buttons, and Pin.
+- A scrollable plain-text `NSTextView`.
+- A status footer with optional text statistics and local-save state.
+- A native blurred popover background clipped to a continuous rounded silhouette.
+
+Panel behavior:
+
+- The panel is anchored under the status item and clamped to the visible screen.
+- The panel can become key even though the app is accessory-only.
+- The editor receives focus whenever the panel opens.
+- The unpinned panel dismisses on Escape or outside click.
+- Dragging the attached panel background away from its menu-bar position pins
+  it automatically and updates the Pin control.
+- The Pin control also toggles the attached/pinned state directly.
+- The pinned panel does not dismiss on outside click.
+- Toggling while pinned brings the panel/key focus forward instead of hiding it.
+- Explicitly closing a pinned panel clears its pinned state, so the next open
+  returns beneath the menu-bar item.
+- Opening Settings from an attached panel dismisses the popover first.
+- A compact header contains Close, seven colored scratchpad selectors, and Pin.
+  Inactive selectors are rings and the active selector is filled.
+- A footer shows list controls, optional live line/word/character counts,
+  local-save state (`Saving`, `Saved`, recovery pending, or failure), and
+  Settings. The compact display labels the final count as `chars`.
+- General settings can hide the statistics label without disabling list,
+  save-state, or Settings controls.
+- The panel uses AppKit's active popover material with behind-window blending,
+  preserving native blurred transparency in light and dark appearances.
+- Clicking the status item is excluded from outside-click handling so one click
+  closes an open, unpinned panel without dismissing and reopening it.
+- Clicking AppKit auxiliary panels such as spelling and correction suggestions
+  does not dismiss the scratchpad.
+- Escape is ignored by BetterTot while the text view has marked text, allowing
+  input methods to handle IME composition cancellation.
+- AppKit Writing Tools are disabled by default, preventing the Write with Siri
+  cursor accessory from covering compact pad content. On Apple
+  Intelligence-compatible Macs running macOS 15.1 or later, users can opt in
+  from Editor settings and restore the system-defined Writing Tools and Siri
+  behavior. Intermediate Writing Tools suggestions remain in the editor only;
+  BetterTot persists the accepted text when the system session ends.
+- Return continues plain `- ` lines without changing their marker.
+- Typing `* ` starts bullet mode: the editor renders `• ` while persistence,
+  copying, and export retain the portable Markdown `* ` marker.
+- Markdown headings, bold, italic, inline code, and `http`/`https` links receive
+  live native styling. Complete syntax delimiters collapse visually but remain
+  in the underlying plain text for editing, undo, persistence, and export.
+- Bold Markdown uses the selected pad color; links retain the system link color.
+- Footer controls toggle bulleted, numbered, or checkbox formatting across the
+  current line or selected lines. Numbered lists increment on Return.
+- Checkboxes are persisted and exported as Markdown task-list markers:
+  `- [ ] ` and `- [x] `. The editor projects those markers into native inline
+  TextKit attachment cells tinted to match the selected pad.
+- The source/display adapter maps UTF-16 selections between Markdown source
+  coordinates and attachment-backed editor coordinates. Attachments never leak
+  object-replacement characters into journals, backups, exports, or pasteboard
+  text.
+- Clicking an attachment or pressing Command-Return on its line toggles state
+  through the normal undo and persistence pipeline.
+- Return continues rendered checkboxes and legacy `☐`, `☑`, `- [ ] `, `- [x] `,
+  or `- [X] ` input with a new unchecked task. Legacy forms normalize to
+  Markdown when persisted without rewriting unrelated text.
+- Return on an empty dash, bullet, numbered item, or checkbox removes the marker
+  and exits the list.
+- Checklist paragraphs use a font-scaled hanging indent so wrapped lines align
+  with their text rather than the checkbox gutter.
+- Automatic list handling is disabled while the text view has marked text, so
+  Return remains available to the active input method.
+
+### Pad Slots
+
+- There are exactly seven logical pads.
+- Pads are addressed by fixed positions `0...6` internally. The panel displays
+  colored dots; numeric identities remain in tooltips, accessibility labels,
+  keyboard shortcuts, announcements, and exported file names.
+- Each pad has an independent text buffer, selection, scroll offset, content
+  revision, and undo manager.
+- Pad switches persist the outgoing pad's selection/scroll state, commit any
+  pending text save, load the incoming pad, and announce the selected pad to
+  VoiceOver.
+- The model includes optional `name` and `colorIdentifier` fields. Recognized
+  color identifiers override the deterministic seven-color fallback palette.
+- The Pads settings page edits one selected slot at a time using the same seven
+  colored dots shown in the panel, a single-line name field, and fixed color
+  swatches.
+- Pad names are trimmed, limited to 24 user-perceived characters, and cannot
+  contain line breaks, tabs, or control characters. Empty names restore the
+  `Scratchpad N` default. Duplicate names are allowed because numeric positions
+  remain authoritative.
+- Custom names appear alongside the numeric identity in tooltips, editor
+  accessibility labels, and VoiceOver announcements. They do not change pad
+  IDs, keyboard shortcuts, backup/export filenames, or content storage paths.
+- Appearance edits are atomically written to `workspace.json` and then applied
+  to the live panel without reloading text or replacing undo state.
+- An upgraded workspace may retain its former eighth pad as a hidden compatibility
+  record. It remains available to backup, restore, and Export All, but never
+  appears in the panel, Settings, or keyboard navigation.
+
+## Keyboard Behavior
+
+Global shortcut:
+
+- Default: Option-Command-Space.
+- Configurable in Settings.
+- Implemented through Carbon event hotkeys.
+- Persisted shortcuts are revalidated when loaded from `UserDefaults`.
+- A valid shortcut must use Command, Option, or Control unless the key is an
+  F-key.
+
+Panel/editor shortcuts:
+
+| Shortcut | Behavior |
+| --- | --- |
+| `Command-1` ... `Command-7` | Select pad 1 ... 7 |
+| `Control-Shift-Tab` | Previous pad |
+| `Control-Tab` | Next pad |
+| `Shift-Command-C` | Copy entire current pad |
+| `Shift-Command-Delete` | Clear current pad through undoable text editing |
+| `Command-P` | Pin or unpin panel |
+| `Command-W` | Close an attached or pinned panel |
+| `Command-Return` | Toggle the checkbox on the current line |
+| `Return` | Continue a bullet or checkbox; exit an empty list item |
+| `Escape` | Dismiss unpinned panel unless IME composition is active |
+| `Command-Q` | Quit BetterTot |
+| `Command-,` | Open Settings |
+| `Command-Z` / `Shift-Command-Z` | Undo / redo |
+| `Command-X/C/V/A` | Standard cut, copy, paste, select all |
+
+Bare `Command-Left` and `Command-Right` retain the text system's native
+line-start and line-end caret navigation in the editor.
+
+## Settings
+
+Settings are stored in standard app `UserDefaults`.
+
+The settings window uses an `800 × 460` layout with a fixed vertical
+sidebar and five pages:
+`General`, `Pads`, `Editor`, `Storage`, and `Updates`. Each page icon sits in a
+circular material container. The selected icon uses the system accent color
+while inactive icons remain gray; the row itself stays transparent. Switching
+pages does not resize the window or interrupt the scratchpad panel.
+
+Supported settings:
+
+- Launch at login, via `SMAppService.mainApp`, enabled only in a bundled app.
+- Global shortcut.
+- Pad selection through seven numbered colored circles, pad name through a
+  rounded system text field, and color through a native pop-up button.
+- Check spelling while typing.
+- Smart quotes.
+- Smart dashes.
+- Apple Writing Tools and Siri, disabled by default and available on compatible
+  Macs running macOS 15.1 or later.
+- Editor font name and size.
+
+Storage is the only backup control surface. It shows iCloud repository health,
+the latest backup date and size, and the deterministic path. It provides
+`Back Up Now`, `Restore`, and `Open in iCloud Drive`. There is no
+folder chooser, mirror switch, local-backup destination, or local recovery
+section. Local journals remain an internal crash-recovery mechanism.
+
+The Updates page displays the installed version/build and retains a manual
+`Check for Updates` action. Bundled semantic-version builds also check once at
+launch when no successful automatic check has completed in the previous 24
+hours. Checks request the latest public GitHub release through an ephemeral
+`URLSession`, validate semantic versions, response size, and the HTTPS GitHub
+release URL, and never download or install software. Overlapping manual checks
+are rejected; failed automatic checks are not recorded as successful.
+
+Shortcut recording behavior:
+
+- Clicking the shortcut button starts a local key-down monitor.
+- Recording only captures events aimed at the settings window.
+- Bare Escape cancels recording.
+- Invalid shortcuts beep and keep recording active.
+- If Carbon registration fails, the previous shortcut is restored and the user
+  receives an actionable alert.
+- Recording ends when the settings window resigns key or closes.
+
+## Data Model
+
+### `PadID`
+
+`PadID` wraps a UUID and is used as the stable identity for pad files and
+metadata records.
+
+### `StoredSelection`
+
+Selection is stored as UTF-16 location and length because `NSTextView` uses
+`NSRange`. Selections are clamped against the current text length before being
+restored.
+
+### `PadMetadata`
+
+Each pad metadata record contains:
+
+- `id`
+- `position`
+- `name`
+- `colorIdentifier`
+- `selection`
+- `scrollOffset`
+- `contentRevision`
+- `updatedAt`
+
+### `WorkspaceMetadata`
+
+Workspace metadata contains:
+
+- `schemaVersion`
+- `selectedPadID`
+- `pads`
+- `lastCleanShutdown`
+
+Current schema version: `1`.
+
+Workspace invariants:
+
+- Exactly seven active pad metadata records, with at most one retained hidden
+  legacy record.
+- Unique pad IDs.
+- Active positions normalized to `0...6`; a retained legacy record uses `7`.
+- Selected pad ID must refer to an active pad.
+- Metadata repair may drop records beyond the retained legacy slot but must not
+  delete extra pad files from disk.
+
+## Storage Layout
+
+Default root:
+
+```text
+~/Library/Application Support/BetterTot/
+```
+
+Layout:
+
+```text
+BetterTot/
+|-- Pads/
+|   `-- <pad-uuid>.txt
+|-- workspace.json
+|-- workspace.json.corrupt
+|-- Journal/
+|   |-- <pad-uuid>.log
+|   `-- recovered/
+|       |-- <pad-uuid>-<timestamp>.txt
+|       `-- <pad-uuid>-<timestamp>.corrupt
+```
+
+Backups are outside the local application-data root:
+
+```text
+~/Library/Mobile Documents/com~apple~CloudDocs/
+`-- BetterTot Backups (org.bettertot.BetterTot)/
+    |-- repository.json
+    |-- hourly/<yyyyMMdd-HHmmss>/
+    |-- daily/<yyyyMMdd-HHmmss>/
+    `-- manual/<yyyyMMdd-HHmmss>/
+```
+
+Pad text files:
+
+- One UTF-8 text file per pad.
+- File name is the pad UUID plus `.txt`.
+- Empty pads may have missing files or zero-byte files depending on the save
+  history.
+
+Metadata:
+
+- `workspace.json` stores pad order, selected pad, per-pad UI state, revisions,
+  and clean-shutdown marker.
+- `workspace.json` does not store note text.
+- Corrupt or incompatible metadata is preserved as `workspace.json.corrupt` and
+  rebuilt by adopting existing pad files.
+
+## Persistence and Recovery
+
+`WorkspaceStore` is an actor and is the single writer for pad files, journals,
+metadata, iCloud backups, and export-all operations.
+
+### Load
+
+On load, the store:
+
+1. Creates `root`, `Pads`, `Journal`, and `Journal/recovered` directories.
+2. Migrates a legacy root-level `pad.txt` into a UUID-named pad file when no
+   metadata exists.
+3. Loads `workspace.json` or rebuilds metadata from existing pad files.
+4. Repairs workspace invariants.
+5. Reads each pad file as UTF-8 text.
+6. Preserves unreadable pad bytes to `Journal/recovered/*.corrupt` and opens
+   that pad as empty.
+7. Replays the newest valid journal entry for each pad if its revision is newer
+   than the committed revision.
+8. Clears stale or successfully recovered journals.
+9. Marks the live session as not cleanly shut down and writes metadata.
+
+Journal recovery rules:
+
+- Journal files are JSON Lines.
+- Each journal entry is a full-text snapshot, not a diff.
+- The newest valid entry by revision wins.
+- Torn or undecodable trailing lines are ignored without poisoning earlier
+  valid lines.
+- Recovery preserves the previous committed file in `Journal/recovered/` when
+  it differs from the journaled text.
+- If recovery cannot write the pad file, the journal is retained and the UI
+  revision seed is set so a later successful commit retries the recovery.
+- Metadata must never claim a revision that the pad file does not contain.
+
+### Edit and Commit
+
+On every `NSTextView` change:
+
+1. The selected pad's in-memory text is updated.
+2. The pad revision is incremented.
+3. A full-text journal entry is appended.
+4. A 200 ms debounced commit is scheduled.
+
+On commit:
+
+1. Stale revisions are ignored.
+2. The pad text is written atomically as UTF-8.
+3. The pad's `contentRevision` and `updatedAt` are updated.
+4. The journal is cleared when the committed revision is at least the newest
+   journaled revision.
+5. Metadata is atomically written.
+6. Hourly/daily auto-backup checks run after successful commits.
+
+On pad switch, dismiss, and quit, pending commits are flushed synchronously from
+the controller's perspective.
+
+## Backups
+
+Backup kinds:
+
+| Kind | Retention |
+| --- | --- |
+| `hourly` | Newest 24 timestamped backup directories |
+| `daily` | Newest 14 timestamped backup directories |
+| `manual` | Unlimited; kept until the user deletes them |
+
+Backup directory names use UTC timestamps in `yyyyMMdd-HHmmss` format. Same
+second collisions are uniquified with suffixes such as `-1`.
+
+Each backup contains:
+
+```text
+Pad 1.txt
+Pad 2.txt
+Pad 3.txt
+Pad 4.txt
+Pad 5.txt
+Pad 6.txt
+Pad 7.txt
+workspace.json
+```
+
+Backup rules:
+
+- Backups copy pad files by pad position.
+- Missing source pad files produce empty backup files.
+- Only timestamp-named directories are counted, aged, or pruned.
+- Unknown files, renamed folders, symlinks, malformed tiers, or a mismatched
+  ownership manifest block all backup writes and pruning without modifying the
+  offending content.
+- Upgraded workspaces may also contain `Pad 8.txt`; it is retained for restore
+  and export compatibility.
+- Auto-backups are write-driven rather than timer-driven.
+- Hourly and daily backups are created when the newest backup in that tier is
+  older than one hour or one day respectively.
+- Snapshots are assembled in a hidden temporary sibling and moved into view
+  only after every pad and metadata file is written.
+- BetterTot never creates the `Mobile Documents` or `com~apple~CloudDocs`
+  ancestors. Missing or unwritable iCloud Drive reports an unavailable state;
+  normal local editing remains operational.
+- An absent or empty deterministic app folder is claimed with the atomic
+  schema-v1 `repository.json` ownership manifest.
+- Legacy local backups and the former selected mirror are copied into the
+  repository non-destructively during load. A completion record prevents
+  migrated snapshots from being resurrected after retention or user deletion.
+  Source data is never deleted; migration waits while iCloud is unavailable.
+- This is backup synchronization, not live multi-device pad synchronization.
+
+## Import, Export, and Restore
+
+Import current pad:
+
+- Accepts a single text file through `NSOpenPanel`.
+- Reads only regular, non-symlink UTF-8 or BOM-marked UTF-16 files up to
+  16 MiB; other inputs are rejected without reading them into the editor.
+- Empty current pad is replaced directly.
+- Non-empty current pad prompts for Replace, Append, or Cancel.
+- Replace first commits all edited pads and creates a manual safety backup.
+- If the safety backup fails, import is cancelled and the pad is unchanged.
+- Append inserts a newline first when the existing pad does not end in one.
+- Imports route through normal text editing so they are undoable and journaled.
+
+Export current pad:
+
+- Uses `NSSavePanel`.
+- Default file name: `Pad N.txt`.
+- Writes the current editor string as UTF-8 plain text.
+
+Export all pads:
+
+- Uses a directory picker.
+- Commits all edited pads before export.
+- Writes `Pad 1.txt` through `Pad 7.txt`, plus a retained legacy `Pad 8.txt`
+  when present.
+- Copies workspace metadata as `metadata.json` when available.
+
+Restore backup:
+
+- Uses a directory picker rooted at the backup folder.
+- Expects one or more `Pad N.txt` files.
+- Refuses folders with no `Pad N.txt` files.
+- Commits all edited pads and creates a manual safety backup before restoring.
+- If the safety backup fails, restore is cancelled and current data remains.
+- Restores by position, not by UUID.
+- Restoring `Pad 8.txt` into a seven-pad workspace creates the hidden legacy
+  record before applying its content.
+- Missing files are skipped silently.
+- Existing unreadable files are reported and leave their pads unchanged.
+- Restored text is committed before success is reported.
+- Undo stacks are cleared after restore.
+- Restore does not consume the backup's `workspace.json`.
+
+## Privacy and Security
+
+Privacy posture:
+
+- Bundled release builds request public release metadata from `api.github.com`
+  at most once per 24 hours and when the user manually checks; no note or
+  workspace data is included.
+- No analytics, telemetry, advertising SDKs, or accounts.
+- No collection of note content, clipboard content, or file content.
+- Active data is stored locally and backups are stored in iCloud Drive; both
+  use plain files.
+
+Logging policy:
+
+- Logs may include operational failures such as save, backup, shortcut, or login
+  item errors.
+- Logs must not include note content, clipboard content, imported text, exported
+  text, or full file contents.
+
+Security limitations:
+
+- BetterTot does not encrypt pad files, journals, recovered files, backups, or
+  exported files.
+- Deleted pad text can remain in journals, recovered files, backups, external
+  exports, Time Machine, or other system backups.
+- "Clear pad" clears the active pad text, not historical backup or recovery
+  material.
+
+## Accessibility and International Text
+
+Implemented accessibility support:
+
+- Status item image has an accessibility description.
+- Segment control is labelled "Scratchpads".
+- Each segment has a `Scratchpad N` tooltip.
+- The text view accessibility label updates to the selected scratchpad.
+- Pad switches post VoiceOver announcements, including an "empty" suffix when
+  applicable.
+
+International text behavior:
+
+- Pad files are strict UTF-8 on normal writes.
+- Text and selection handling accounts for UTF-16 `NSTextView` ranges.
+- Escape does not dismiss the panel while IME marked text is active.
+- Tests cover Unicode text persistence and UTF-16 selection clamping.
+
+## Testing Baseline
+
+Automated test command:
+
+```sh
+swift test
+```
+
+Current automated coverage is concentrated in:
+
+- `WorkspaceStoreTests`: workspace invariants, metadata repair, commit/reload,
+  journal recovery, stale revision handling, corrupted metadata containment,
+  orphan adoption, torn journal handling, unreadable pad preservation, empty
+  commit durability, legacy migration, clean-shutdown marker, and selection
+  clamping.
+- `BackupTests`: deterministic iCloud resolution, unavailable and foreign
+  repository containment, non-destructive legacy migration, latest date/size
+  summaries, manual backups, hourly/daily pruning, same-second collisions,
+  commit-triggered auto-backups, and export-all layout.
+- `AutomaticUpdateCheckPolicyTests`: bundled-build gating, 24-hour throttling,
+  manual-check independence, and successful-check persistence.
+- `RestoreTests`: restore-by-position behavior, missing file skips, and
+  unreadable existing file reporting.
+- `ShortcutTests`: shortcut validation, display formatting, Codable round trips,
+  Carbon registration lifecycle, failed re-registration behavior, persisted
+  shortcut validation, and event-to-shortcut conversion.
+- `PanelControllerTests`: ordinary Return behavior, automatic bullet and
+  checkbox continuation, attachment and keyboard checkbox toggling, Markdown
+  serialization, empty-item list exit, IME command ownership, panel dismissal,
+  pinning, focus, pad switching, and undo isolation.
+
+Manual checklist coverage remains important for UI behaviors that are hard to
+exercise through the current test suite:
+
+- Editor focus from status item and global shortcut.
+- Return inserting ordinary newlines, continuing lists, and exiting empty list
+  items without dismissing.
+- Outside-click dismissal when unpinned.
+- Pin/unpin preserving editor and undo history.
+- Rapid pad switching while typing.
+- Undo isolation across pads.
+- Selection and scroll restoration in the visible UI.
+- Multi-display panel positioning.
+- IME composition behavior.
+- Settings shortcut recording interactions.
+- VoiceOver reachability and announcements.
+- Launch-at-login behavior from the bundled app.
+
+Verification performed while writing this spec:
+
+```text
+swift test
+Executed 158 tests, with 0 failures.
+Line coverage: 89.13% (5181/5813), minimum 80.00%.
+```
+
+## Current Gaps and Risks
+
+- `scripts/test.sh` enforces at least 80% aggregate source line coverage and a
+  30% floor for every non-entry source file. The current instrumented result is
+  89.13% across 158 passing tests.
+- VoiceOver, IME, multi-display positioning, and launch-at-login remain manual
+  acceptance checks. The local checklist passed on 2026-07-27 and must be
+  repeated for a future public-distribution candidate if scope changes.
+- Launch-at-login can only be exercised meaningfully from `dist/BetterTot.app`.
+- Backups and recovered journals intentionally preserve user text beyond active
+  pad deletion; an explicit "erase history" action does not exist.
+- Notarization and clean-Mac Gatekeeper acceptance are intentionally outside
+  the current private/local distribution scope.
+- The layered application icon is generated deterministically from
+  `Assets/AppIcon.svg` and embedded in release bundles as `BetterTot.icns`.
+
+## Contribution Constraints
+
+- Preserve the local-first privacy model unless a future product decision
+  explicitly changes it.
+- Never log note text, clipboard text, imported file contents, exported file
+  contents, or recovered file contents.
+- Keep the seven-pad invariant unless both storage and UI specs are updated.
+- Treat `WorkspaceStore` as the single disk writer for workspace data.
+- Preserve crash recovery semantics when changing editor, journal, or commit
+  behavior.
+- Any destructive import or restore path must keep the existing safety-backup
+  behavior or replace it with a stronger recovery guarantee.
+- Changes to keyboard handling must account for the nonactivating panel and
+  should not break standard editing commands.
+- Changes to selection handling must respect UTF-16 `NSTextView` ranges.
+- New storage schema versions need deterministic repair or migration behavior
+  that never deletes existing pad text files as a side effect.

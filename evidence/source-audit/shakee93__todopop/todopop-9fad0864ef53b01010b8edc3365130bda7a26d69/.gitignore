@@ -1,0 +1,17 @@
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Build output / distributables
+TodoPop.app/
+dist/
+*.zip
+
+# Xcode (if ever opened in Xcode)
+*.xcodeproj/
+DerivedData/
+xcuserdata/
+
+# macOS
+.DS_Store

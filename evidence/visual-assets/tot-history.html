@@ -1,0 +1,421 @@
+
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+	<meta http-equiv="Content-Language" content="en-us" />
+	<meta name="description" content="Tot - Your tiny text companion" />
+	<meta name="keywords" content="iconfactory, mac, iphone, ipod, text, edit, editor, apple, app, application" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+	<meta property="og:type" content="website">
+	<meta property="og:site_name" content="Tot">
+	<meta property="og:title" content="Tot &bull; Your tiny text companion" />
+	<meta property="og:image" content="https://tot.rocks/images/share-image.png" />
+	<meta property="og:description" content="Tot - Your tiny text companion" />
+	
+	
+	<title>Tot &bull; Your tiny text companion</title>
+
+	<link href="stylesheets/reset.css" media="screen" rel="Stylesheet" type="text/css" />
+	<link href="stylesheets/style.css?2025081901" media="screen" rel="Stylesheet" type="text/css" />
+	
+	<link rel="stylesheet" href="https://use.typekit.net/zhf6epp.css">
+	
+	<link rel="shortcut icon" href="/favicon.ico">
+
+	<script type="text/javascript">
+
+function toggleVisibility(element) {
+	var headerElement = element;
+	var parentElement = element.parentElement;
+	var contentsElement = parentElement.getElementsByClassName("contents")[0];
+	if (contentsElement) {
+		var currentState = contentsElement.style.display;
+		if (currentState == "") {
+			contentsElement.style.display = "none";
+			headerElement.style.backgroundImage = "url('../images/history-show@2x.png')";
+		}
+		else {
+			contentsElement.style.display = "";
+			headerElement.style.backgroundImage = "";
+		}
+	}
+	var summaryElement = parentElement.getElementsByClassName("summary")[0];
+	if (summaryElement) {
+		var currentState = summaryElement.style.display;
+		if (currentState == "block") {
+			summaryElement.style.display = "";
+		}
+		else {
+			summaryElement.style.display = "block";
+		}
+	}
+}
+
+	</script>
+
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-T093Z25Z5K"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-T093Z25Z5K');
+</script>
+
+</head>
+
+<body>
+
+<header role="banner">
+
+	<div id="logo">
+		<a href="http://iconfactory.com/"><img src="images/shared/if_logo.png" width="196" height="45" alt="Iconfactory" /></a>
+	</div>
+
+	<nav role="navigation">
+		<ul>
+			<li id="nav_ourapps"><a href="http://iconfactoryapps.com">Our Apps</a></li>
+			<li id="nav_twitterlink"><a href="https://iconfactory.world/@Iconfactory">@Iconfactory</a></li>
+		</ul>
+	</nav>
+
+</header>
+
+
+<main role="main">
+
+	<section id="tout">
+		<a href="/"><img src="/images/tot_tout_2.png" alt="Tot - Your tiny text companion" /></a>
+	</section>
+	
+	
+	<section id="full-history">
+		<h1>Tot</h1>
+		
+		<h2>Version History</h2>
+
+		<div class="release">	
+			<h3 onclick="toggleVisibility(this);">Tot 2.1.1</h3>
+			<p class="date">October 2025</p>
+						
+			<div class="contents">			
+				
+				<h4>Improvements</h4>
+				
+				<ul>
+					<li>Tot’s What’s New view no longer appears when there’s nothing new</li>
+					<li>Added "System (Monospaced)" as a rich text font choice</li>
+				</ul>
+								
+				<h4>iOS Improvements</h4>
+
+				<ul>
+					<li>Added a toggle to turn Tot’s formatting bar on/off:
+						<ul>
+							<li>Tap the Actions Menu (⋯) and toggle Format Bar</li>
+							<li>Increases editing area on smaller devices</li>
+						</ul>
+					</li>
+					<li>Fixed an issue with Compact Dots button not working</li>
+				</ul>
+
+				<h4>macOS Improvements</h4>
+
+				<ul>
+					<li>Added “Display as Floating Window” back to menu bar:
+						<ul>
+							<li>Shift-Command-F is default keyboard shortcut</li>
+							<li>You can override shortcut in System Settings</li>
+						</ul>
+					</li>
+					<li>Added a partial workaround for bug on macOS Tahoe:
+						<ul>
+							<li>Happens when presenting the popover window and the menu bar is hidden</li>
+							<li>Fixed window that was too small and placed incorrectly</li>
+							<li>There is still a nub that we can't fix: it's arrows displaying incorrectly</li>
+						</ul>
+					</li>
+				</ul>
+
+			</div>
+			<div class="summary">
+				<strong>5</strong> improvements
+			</div> 
+		</div>
+
+		<div class="release">	
+			<h3 onclick="toggleVisibility(this);">Tot 2.1</h3>
+			<p class="date">September 2025</p>
+						
+			<div class="contents">			
+				
+				<h4>Improvements</h4>
+				
+				<ul>
+					<li>Added the classic “Tot 1.0” app icon</li>
+					<li>Tab and Shift-Tab can now be used to indent or outdent selected text (on iOS this only works with hardware keyboard attached)</li>
+					<li>Fixed issues with typing attributes, like bold and italic, being set incorrectly</li>
+					<li>A number followed by a period is no longer recognized as a bullet</li>
+					<li>Clarified wording for premium features on purchase screens</li>
+				</ul>
+								
+				<h4>iOS Improvements</h4>
+
+				<ul>
+					<li>Added support for Liquid Glass</li>
+					<li>Settings > Advanced Settings > Reset Theme will clear custom dot colors set on Mac</li>
+					<li>Fixed issues with the iOS widgets when using colored/clear tints</li>
+					<li>The Done button in Settings is now more visually prominent</li>
+				</ul>
+
+				<h4>macOS Improvements</h4>
+
+				<ul>
+					<li>The Show Window keyboard shortcut control is accessible via VoiceOver</li>
+					<li>Improved VoiceOver accessibility of various Settings screens</li>
+					<li>Added support for incremental text search</li>
+				</ul>
+
+				<h4>watchOS Improvements</h4>
+
+				<ul>
+					<li>Added support for Liquid Glass</li>
+					<li>Tapping Clear All Text now syncs the dot’s text changes correctly</li>
+				</ul>
+
+			</div>
+			<div class="summary">
+				<strong>14</strong> improvements
+			</div> 
+		</div>
+
+		<div class="release">	
+			<h3 onclick="toggleVisibility(this);">Tot 2.0</h3>
+			<p class="date">August 2025</p>
+						
+			<div class="contents">			
+				
+				<h4>New Features</h4>
+				
+				<ul>
+					<li>Custom Smart Bullets:
+						<ul>
+							<li>Assign symbols or standard Emoji to act as Smart Bullets</li>
+							<li>Create up to eight custom smart bullets via Settings > Appearance</li>
+							<li>Assign Custom Smart Bullets to Quick Key slots for instant access</li>
+						</ul>
+					</li>
+					<li>Text Dividers:
+						<ul>
+							<li>Eight divider styles to choose from via the symbol picker</li>
+							<li>Assign text dividers to Quick Key slots for easy use</li>
+							<li>Keyboard shortcut: Ctrl-Minus to add a new divider</li>
+							<li>Dividers can be cut/copy/pasted at will</li>
+							<li>Uses Markdown horizontal rules</li>
+							<li>[Yay Funk_Shui & Stragen!]</li>
+						</ul>
+					</li>
+					<li>Automatic indents:
+						<ul>
+							<li>Lines that begin with a bullet or Smart Bullet will automatically indent text that’s wider than the window</li>
+							<li>The Cmd-[ and Cmd-] keyboard shortcuts can be used to indent any selection</li>
+							<li>Lines that begin with a space will use that for indentation, otherwise tabs are used</li>
+							<li>Works with plain text: great for writing in Markdown [Yay Gruber!]</li>
+						</ul>
+					</li>
+				</ul>
+				
+				<h4>Improvements</h4>
+				<ul>
+					<li>Improved text handling & bug fixes:
+						<ul>
+							<li>Paste as Plain Text can now strip Markdown and works better with rich text</li>
+							<li>Fixed a bug where bold stuck around after creating newlines [Yay Nathan!]</li>
+							<li>Improved handling of styling information while using drag & drop</li>
+							<li>Fixed a styling bug when pasting Smart Bullets in plain text mode</li>
+							<li>Fixed a big bug when opening links beginning with “HTTP”</li>
+							<li>New "Selected Dot" action for Shortcuts [Yay pseudometa!]</li>
+						</ul>
+					</li>
+					<li>Updated User Manual:
+						<ul>
+							<li>Removed Twitter links because screw those guys</li>
+							<li>Updated for new features and settings</li>
+							<li>Added information and links for advanced users</li>
+						</ul>
+					</li>
+				</ul>
+				
+				<h4>macOS Improvements</h4>
+
+				<ul>
+					<li>Updated Settings:
+						<ul>
+							<li>Settings now open in their own popover / window</li>
+							<li>Settings re-designed for improved clarity and feature discoverability</li>
+							<li>Control: New option – invoke Tot using Both Icons for menu bar and Dock</li>
+							<li>Appearance: New vibrant background option, dot configuration, app icons</li>
+							<li>Behavior: Floating window, follow mouse, disable escape key</li>
+							<li>Overview for apps on iOS and watchOS</li>
+							<li>Better help links and support site access</li>
+						</ul>
+					</li>
+
+					<li>Improved Editing:
+						<ul>
+							<li>Typing completions: Turn on Edit > Spelling & Grammar > Check Spelling While Typing + Correct Spelling Automatically</li>
+							<li>Smart Copy/Paste now stays disabled across launches [Yay Dustin!]</li>
+							<li>Added menu item for Remapping Keyboard Shortcuts</li>
+						</ul>
+					</li>
+
+					<li>Window, Dock, and menu bar:
+						<ul>
+							<li>Added a setting to show selected dot color in menubar [Yay Tom!]</li>
+							<li>Better handling of smart icons (now works with all app windows)</li>
+							<li>Improved restoring window state when using menu bar and smart icons</li>
+							<li>Tot will only enter full screen mode when using Dock or Both icons</li>
+							<li>Tot can now appear over full screen windows</li>
+							<li>Fixed issues with icons stuck in Dock [Yay Ilia!]</li>
+						</ul>
+					</li>
+					
+					<li>Fixed issues using Cmd-1 to 7 on Czech keyboards [Yay Roman!]</li>
+					<li>Improved handling of page margins when printing [Yay Dan!]</li>
+					<li>What’s New video no longer shows in Now Playing</li>
+				</ul>
+
+				<h4>iOS Improvements</h4>
+
+				<ul>
+					<li>New main menu (⋯) item:
+						<ul>
+							<li>Access to new Settings</li>
+							<li>Bulk operations for Copying/Clearing/Replacing all text</li>
+							<li>Export operations for Sharing/Saving/Printing</li>
+							<li>Export works with selection or full text (if no selection)</li>
+							<li>Quick access to User Manual</li>
+						</ul>
+					</li>
+
+					<li>Greatly improved keyboard input and status bar:
+						<ul>
+							<li>Re-designed to be more reliable on iPadOS</li>
+							<li>Two new Quick Key slots for greater customization</li>
+							 <li>Dot’s meta info now includes relative time since last update</li>
+							<li>New, explicit undo/redo buttons</li>
+						</ul>
+					</li>
+
+					<li>Updated Settings:
+						<ul>
+							<li>Appearance section with new icons, Quick Keys, Smart Bullets, dot numbers, color highlights</li>
+							<li>Better preview and options to adjust Text & Layou</li>
+							<li>Behavior section to configure new options</li>
+							<li>Advanced settings to restore automatic backups and export data</li>
+							<li>Overview for apps on watchOS and macOS</li>
+							<li>New What’s New section to review recent Tot changes</li>
+							<li>Quick access to get support documentation</li>
+							<li>Credits and links to our other apps</li>
+						</ul>
+					</li>
+
+					<li>Improved menu bar on iPadOS</li>
+					<li>Automatic backup: Saves to device when changes are detected</li>
+					<li>Improved touch response speed</li>
+				</ul>
+
+				<h4>watchOS Improvements</h4>
+
+				<ul>
+					<li>Simplified and more modern UI for viewing text:
+						<ul>
+							<li>Colorful backgrounds</li>
+							<li>Corner controls</li>
+						</ul>
+					</li>
+					
+					<li>New "+" button:
+						<ul>
+							<li>Better UI & wording for adding text</li>
+							<li>New “After First Line” option [Yay Joey!]</li>
+						</ul>
+					</li>
+
+					<li>Added “⋯” button:
+						<ul>
+							<li>Shows summary for characters/words/lines</li>
+							<li>New Share button</li>
+							<li>“Clear All Text” button</li>
+						</ul>
+					</li>
+				</ul>
+
+			</div>
+			<div class="summary">
+				<strong>3</strong> new features, <strong>17</strong> improvements
+			</div> 
+		</div>
+
+		<div>
+			<a href="/versions/?C=M&O=D">Previous Versions…</a>
+		</div>
+	</section>
+
+	<section id="bottom-download">
+	
+		<img src="/images/tot_icon.png" alt="Give Tot a try." /> 
+	
+		<p>Give <em>Tot</em> a try.</p>
+	
+	
+		<div class="download">
+			<a href="https://apps.apple.com/us/app/tot-pocket/id1498235191?ls=1&mt=12&uo=4&pt=8934&at=10l4G7&ct=TOT_SITE" class="ios">
+				Download for iOS
+			</a>
+			
+			<a href="https://apps.apple.com/us/app/tot/id1491071483?ls=1&mt=12&uo=4&pt=8934&at=10l4G7&ct=TOT_SITE" class="macos">
+				Download for macOS
+			</a>
+
+			<a href="https://apps.apple.com/us/app/tot-mini/id1644609331?ls=1&mt=12&uo=4&pt=8934&at=10l4G7&ct=TOT_SITE" class="watchos">
+				Download for watchOS
+			</a>
+			
+		</div>
+		
+		<p class="pricing">Free on Mac, iPhone, and iPad, with paid premium features.</p>
+
+	</section>
+
+
+</main>
+
+
+
+
+
+<footer role="contentinfo">
+	<p>
+		Follow <a href="https://iconfactory.world/@Iconfactory">@Iconfactory</a> for the latest updates.
+		<br/>
+		Check our <a href="http://support.iconfactory.com/kb/tot">Knowledge Base</a> for technical support.
+	</p>
+	<p>
+		<a href="/privacy">Privacy Policy</a> &middot; <a href="/terms">Terms of Use</a> &middot; <a href="https://files.iconfactory.net/press/Tot">Press Kit</a>
+	</p>
+	<p>
+		Copyright &copy; <script type="text/javascript">document.write(new Date().getFullYear());</script> The Iconfactory, Inc.
+	</p>
+</footer>
+
+</body>
+</html>
+
+</body>
+</html>

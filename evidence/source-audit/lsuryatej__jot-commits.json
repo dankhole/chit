@@ -1,0 +1,89 @@
+[
+  {
+    "sha": "388b8c87bf0d1118c672becd83ef79416c46c2fe",
+    "node_id": "C_kwDOUAXYztoAKDM4OGI4Yzg3YmYwZDExMThjNjcyYmVjZDgzZWY3OTQxNmM0NmMyZmU",
+    "commit": {
+      "author": {
+        "name": "Suryatej Lalam",
+        "email": "83549381+lsuryatej@users.noreply.github.com",
+        "date": "2026-09-19T17:53:51Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-09-19T17:53:51Z"
+      },
+      "message": "Merge pull request #13 from lsuryatej/fix/issues-8-11-12\n\nFix the two-press toggle, Cmd+period, and plain bullet continuation",
+      "tree": {
+        "sha": "6545b8122af9836dc0ba68ee90ed378b1c75f8b1",
+        "url": "https://api.github.com/repos/lsuryatej/jot/git/trees/6545b8122af9836dc0ba68ee90ed378b1c75f8b1"
+      },
+      "url": "https://api.github.com/repos/lsuryatej/jot/git/commits/388b8c87bf0d1118c672becd83ef79416c46c2fe",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqrswvCRC1aQ7uu5UhlAAASdcQACN/F4fHQ0em+z6nR4qqgy9F\nKWXYlprgrNKrwiR4/rdkAELAI/MPBYhwkKN5LA2sBYYTM09YEpChx5atBjMHgSdl\nPUWV9x39Gg67z9Y8uRBThRqVvjPqDXpw3UEZcWGXtBW0AsQYMNRCCOkSIBniCepi\n7W6Fdhb0fMftSZSMLhMCwpchCSyPiThM/qGwMjUwBiZeBxUYCg0WpRTBYAM+1Kfd\nmHRwHF82d98rLgjRzpkgm363RjeYJ8CcyU8xPnA2OsGYIR+xoY7oTzv/R4ojxv87\nQI88PnZLhKEOTefPfHCxchrZT/Tvs3oOClg7oxFA5mNHnuifxQchjEZzpuubjfFG\n4F4PH1z1ZF1R98pjAi52S5f+v/BbHb0NBlTGBY3BP5VvE2dHtrhdidPVpfF0lndH\nbK0dnR5g72K3jFLx8ggFZrcCrg9QE2AjCI7Wo8Cc5fNvr5jNjYcCKYaQFujys4mv\neXmLyYOlUDjTnDj4b0aNdB2Q19tPGFLpyHwzi0WIBw9cpIzRReYN439w0YEST9R1\nCyqYeacITwLq56FMfdNdOt39GY9TLu/HSRjIc6Rce05SQERsITaAU8amv+jCpA0y\nk17Mtjyu/vOtcXBLsVu/53EK5DLZfAt06wws8YMXZnkl3Vzl7A+PXn6Uncdrxj/L\nCUa3EYxgax3RPhSbR1re\n=RXA7\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 6545b8122af9836dc0ba68ee90ed378b1c75f8b1\nparent 8b9dac1e868c29e1c1ae62dcdd92073a2da1c22c\nparent e407685b043ccd6abd85f5713a30296b90ca080e\nauthor Suryatej Lalam <83549381+lsuryatej@users.noreply.github.com> 1789840431 +0530\ncommitter GitHub <noreply@github.com> 1789840431 +0530\n\nMerge pull request #13 from lsuryatej/fix/issues-8-11-12\n\nFix the two-press toggle, Cmd+period, and plain bullet continuation",
+        "verified_at": "2026-09-19T17:53:52Z"
+      }
+    },
+    "url": "https://api.github.com/repos/lsuryatej/jot/commits/388b8c87bf0d1118c672becd83ef79416c46c2fe",
+    "html_url": "https://github.com/lsuryatej/jot/commit/388b8c87bf0d1118c672becd83ef79416c46c2fe",
+    "comments_url": "https://api.github.com/repos/lsuryatej/jot/commits/388b8c87bf0d1118c672becd83ef79416c46c2fe/comments",
+    "author": {
+      "login": "lsuryatej",
+      "id": 83549381,
+      "node_id": "MDQ6VXNlcjgzNTQ5Mzgx",
+      "avatar_url": "https://avatars.githubusercontent.com/u/83549381?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/lsuryatej",
+      "html_url": "https://github.com/lsuryatej",
+      "followers_url": "https://api.github.com/users/lsuryatej/followers",
+      "following_url": "https://api.github.com/users/lsuryatej/following{/other_user}",
+      "gists_url": "https://api.github.com/users/lsuryatej/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/lsuryatej/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/lsuryatej/subscriptions",
+      "organizations_url": "https://api.github.com/users/lsuryatej/orgs",
+      "repos_url": "https://api.github.com/users/lsuryatej/repos",
+      "events_url": "https://api.github.com/users/lsuryatej/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/lsuryatej/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "8b9dac1e868c29e1c1ae62dcdd92073a2da1c22c",
+        "url": "https://api.github.com/repos/lsuryatej/jot/commits/8b9dac1e868c29e1c1ae62dcdd92073a2da1c22c",
+        "html_url": "https://github.com/lsuryatej/jot/commit/8b9dac1e868c29e1c1ae62dcdd92073a2da1c22c"
+      },
+      {
+        "sha": "e407685b043ccd6abd85f5713a30296b90ca080e",
+        "url": "https://api.github.com/repos/lsuryatej/jot/commits/e407685b043ccd6abd85f5713a30296b90ca080e",
+        "html_url": "https://github.com/lsuryatej/jot/commit/e407685b043ccd6abd85f5713a30296b90ca080e"
+      }
+    ]
+  }
+]
