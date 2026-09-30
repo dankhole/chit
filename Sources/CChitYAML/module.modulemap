@@ -1,0 +1,4 @@
+module CChitYAML {
+    header "ChitYAML.h"
+    export *
+}

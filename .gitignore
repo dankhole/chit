@@ -1,0 +1,11 @@
+
+# Local Xcode build products and user settings
+/build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Generated Python test bytecode
+__pycache__/
+*.py[cod]
