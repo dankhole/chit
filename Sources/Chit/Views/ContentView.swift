@@ -12,14 +12,23 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if displaysCatalogRecovery {
+                CatalogRecoveryHeader()
+                    .padding(.horizontal, 5).padding(.top, 2).padding(.bottom, 5)
+                Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
+                    .padding(.horizontal, 10)
+                CatalogRecoveryView(model: model)
+            } else {
             ProjectStrip(model: model, onNewList: { groupID in
                 newListGroupID = groupID
                 newListPresented = true
             })
-                .padding(.horizontal, 2)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 5)
+                .padding(.top, 2)
+                .padding(.bottom, 5)
             Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
                 .padding(.horizontal, 10)
+            CatalogRecoveryNoticeView(model: model)
             if let error = model.errorMessage {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(error).font(.system(size: 12)).textSelection(.enabled)
@@ -88,19 +97,29 @@ struct ContentView: View {
             } else if let project = model.selectedProject {
                 ProjectTaskList(model: model, project: project)
                     .id(project.id)
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(model.isStoreAvailable ? "A little space for your next task." : "Your lists could not be loaded. Retry or restore a backup above.")
+            } else if model.isStoreAvailable {
+                VStack(spacing: 12) {
+                    Text("No lists yet")
                         .font(.system(size: 13)).foregroundStyle(Mocha.secondary)
-                    if model.isStoreAvailable {
-                        HStack(spacing: 10) {
-                            Button("New List…") { newListGroupID = nil; newListPresented = true }
-                            Button("Open List…") { ListActions.open(model: model) }
+                    HStack(spacing: 10) {
+                        Menu("New List") {
+                            NewListDestinationOptions(model: model) {
+                                newListGroupID = nil
+                                newListPresented = true
+                            }
                         }
-                        .font(.system(size: 12))
+                        .menuStyle(.borderedButton)
+                        .fixedSize()
+                        Button("Open List…") { ListActions.open(model: model) }
                     }
+                    .font(.system(size: 12))
+                    .controlSize(.small)
                 }
-                .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            } else {
+                CatalogRecoveryView(model: model)
+            }
             }
         }
         .foregroundStyle(Mocha.text)
@@ -119,6 +138,7 @@ struct ContentView: View {
         .onChange(of: model.errorMessage, initial: true) { _, _ in refreshRecoveryBackups() }
         .onChange(of: model.selectedProjectID) { _, _ in refreshRecoveryBackups() }
         .onChange(of: model.selectedListIssue) { _, _ in refreshRecoveryBackups() }
+        .onChange(of: model.isStoreAvailable) { _, _ in refreshRecoveryBackups() }
     }
 
     private var recoveryMenu: some View {
@@ -136,8 +156,14 @@ struct ContentView: View {
 
     private func refreshRecoveryBackups() {
         recoveryListID = model.selectedProjectID
-        recoveryBackups = model.errorMessage != nil || model.selectedListIssue != nil
+        recoveryBackups = model.isStoreAvailable && (model.errorMessage != nil || model.selectedListIssue != nil)
             ? model.availableBackups(listID: recoveryListID) : []
+    }
+
+    private var displaysCatalogRecovery: Bool {
+        // Retain the editor until its unpublished IME composition can commit to
+        // an owner-scoped draft. Recovery must never replace marked text.
+        !model.isStoreAvailable && !compositionInProgress && !selectedEditorHasMarkedText
     }
 
     private var selectedEditorHasMarkedText: Bool {

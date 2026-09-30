@@ -27,14 +27,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var snapshotContainedBackdrop = false
     private var snapshotCompleted = false
     private var snapshotNewList = false
+    private var snapshotRecovery = false
     private var previewBackdrop: NSWindow?
     private var smokeTest = false
+    private var filePanelTest = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
               NSClassFromString("XCTestCase") == nil else { return }
         do { try parseArguments() } catch { exitHarness(error.localizedDescription, code: 64) }
-        isHarness = smokeTest || snapshotPath != nil
+        isHarness = smokeTest || filePanelTest || snapshotPath != nil
         NSApp.setActivationPolicy(.accessory)
         NSApp.appearance = NSAppearance(named: .darkAqua)
         if let isolatedStorePath {
@@ -54,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if model.expandedTaskID != taskID { model.toggleDetails(taskID: taskID) }
         }
         if snapshotPath != nil {
+            if snapshotRecovery { _ = model.beginCatalogRecovery() }
             let showCompleted = snapshotCompleted || model.selectedProject?.tasks.contains(where: { $0.id == snapshotExpandedTask && $0.completed }) == true
             if showCompleted != model.isCompletedExpanded(projectID: model.selectedProjectID) {
                 model.toggleCompleted(projectID: model.selectedProjectID)
@@ -101,20 +104,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 else { snapshotPath = path }
             case "--smoke-test": smokeTest = true
+            case "--file-panel-test": filePanelTest = true
             case "--snapshot-solid": snapshotSolid = true
             case "--snapshot-contrast": snapshotContrast = true
             case "--snapshot-backdrop": snapshotBackdrop = true
             case "--snapshot-contained-backdrop": snapshotContainedBackdrop = true; snapshotBackdrop = true
             case "--snapshot-completed": snapshotCompleted = true
             case "--snapshot-new-list": snapshotNewList = true
+            case "--snapshot-recovery": snapshotRecovery = true
             default: break // AppKit and test runners may pass their own launch arguments.
             }
             index += 1
         }
-        if (smokeTest || snapshotPath != nil) && isolatedStorePath == nil {
-            throw harnessError("--smoke-test and --snapshot require --store with an isolated workspace path.")
+        if (smokeTest || filePanelTest || snapshotPath != nil) && isolatedStorePath == nil {
+            throw harnessError("--smoke-test, --file-panel-test and --snapshot require --store with an isolated workspace path.")
         }
-        if (snapshotExpandedTask != nil || snapshotSize != nil || !snapshotCollapsedGroups.isEmpty || snapshotSolid || snapshotContrast || snapshotBackdrop || snapshotCompleted || snapshotNewList) && snapshotPath == nil {
+        if (snapshotExpandedTask != nil || snapshotSize != nil || !snapshotCollapsedGroups.isEmpty || snapshotSolid || snapshotContrast || snapshotBackdrop || snapshotCompleted || snapshotNewList || snapshotRecovery) && snapshotPath == nil {
             throw harnessError("Snapshot layout flags require --snapshot and an isolated --store.")
         }
     }
@@ -151,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func clampWindow() {
         panel.setFrame(WindowGeometry.reachable(panel.frame, screens: NSScreen.screens.map(\.visibleFrame)), display: true)
+        FilePanelPresenter.keepActivePanelOnScreen()
     }
 
     private func makeMainMenu() {
@@ -166,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(appItem)
         let file = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(item("Close Window", action: #selector(hideFromMenu), key: "w"))
+        fileMenu.addItem(item("Close Window", action: #selector(closeFromMenu), key: "w"))
         file.submenu = fileMenu
         menu.addItem(file)
         let edit = NSMenuItem()
@@ -239,19 +245,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if panel.isVisible { hidePanel() } else { showPanel() }
     }
     @objc private func hideFromMenu() { hidePanel() }
+    @objc private func closeFromMenu() {
+        if FilePanelPresenter.cancelActivePanel() { return }
+        hidePanel()
+    }
     @objc private func quit() { NSApp.terminate(nil) }
 
     func toggleFromShortcut() {
+        if FilePanelPresenter.focusActivePanel() { return }
         if panel.isVisible && panel.isKeyWindow && NSApp.isActive { hidePanel() } else { showPanel() }
     }
 
     func showPanel() {
+        if FilePanelPresenter.focusActivePanel() { return }
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApplication = front
         }
         model.refresh()
         clampWindow()
-        if isHarness && !smokeTest {
+        if isHarness && !smokeTest && !filePanelTest {
             // Appearance snapshots must not steal keystrokes from the user's app.
             panel.orderFrontRegardless()
             return
@@ -263,7 +275,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @discardableResult
     func hidePanel() -> Bool {
         guard panel.attachedSheet == nil, compositionAllowsDismissal(), model.flushEditsForDismissal() else { return false }
-        let restoreFocus = NSApp.isActive && panel.isKeyWindow
+        let restoreFocus = NSApp.isActive && (panel.isKeyWindow || FilePanelPresenter.activePanel != nil)
+        FilePanelPresenter.cancelActivePanel()
         saveGeometry()
         panel.orderOut(nil)
         if restoreFocus, let previousApplication, !previousApplication.isTerminated {
@@ -286,7 +299,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
-        if panel?.attachedSheet == nil && compositionAllowsDismissal() && model.flushEditsForDismissal() { saveGeometry(); return .terminateNow }
+        if panel?.attachedSheet == nil && compositionAllowsDismissal() && model.flushEditsForDismissal() {
+            FilePanelPresenter.cancelActivePanel()
+            saveGeometry()
+            return .terminateNow
+        }
         showPanel()
         return .terminateCancel
     }
@@ -300,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        FilePanelPresenter.cancelActivePanel()
         shortcut?.stop()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
     }
@@ -345,6 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func runHarness() {
         Task { @MainActor in
             do {
+                if filePanelTest { try await NativeFilePanelHarness.run(delegate: self) }
                 if smokeTest {
                     try exerciseLifecycle()
                     try await exerciseProjectDrag()

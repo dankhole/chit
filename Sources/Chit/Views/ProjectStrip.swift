@@ -31,7 +31,9 @@ struct ProjectStrip: View {
                 if dragState.payload != nil { ungroupTarget }
             }
             Menu {
-                Button("New List…") { onNewList(nil) }
+                Menu("New List") {
+                    NewListDestinationOptions(model: model) { onNewList(nil) }
+                }
                 Button("Open List…") { ListActions.open(model: model) }
                 Button("New Group…") { show(.newGroup) }
                 if let project = model.selectedProject {
@@ -200,7 +202,12 @@ struct ProjectStrip: View {
             }
         }
         Divider()
-        Button("Remove from App") { _ = model.removeList(id: project.id) }
+        Button("Hide List") { _ = model.removeList(id: project.id) }
+        Button("Delete List…") { ListActions.delete(project, model: model) }
+            .disabled(model.location(for: project.id) == nil || model.issue(for: project.id) != nil)
+        if model.issue(for: project.id) != nil {
+            Text("Locate or retry the file before deleting.")
+        }
     }
 
     private var folderGlyph: some View {
@@ -221,7 +228,9 @@ struct ProjectStrip: View {
 
     @ViewBuilder private func groupActions(_ group: ProjectGroup) -> some View {
         Button(model.collapsedGroupIDs.contains(group.id) ? "Expand group" : "Collapse group") { model.toggleGroup(group.id) }
-        Button("New List in Group…") { onNewList(group.id) }
+        Menu("New List in Group") {
+            NewListDestinationOptions(model: model, groupID: group.id) { onNewList(group.id) }
+        }
         Button("Open List in Group…") { ListActions.open(model: model, groupID: group.id) }
         Button("Rename Group…") { show(.renameGroup(group)) }
         Divider()

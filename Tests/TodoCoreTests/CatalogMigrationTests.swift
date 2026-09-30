@@ -339,6 +339,115 @@ final class CatalogMigrationTests: XCTestCase {
         XCTAssertEqual(try store.listLocations.mapValues { try Data(contentsOf: $0.url) }, before)
     }
 
+    func testDeleteMovesExactManagedAndExternalBytesAndUnlinksOnlyThatList() throws {
+        let managed = try XCTUnwrap(store.load().projects.first)
+        let external = try store.createList(name: "Repository", at: directory.appendingPathComponent("repository/todo.yaml"))
+        let survivor = try store.createList(name: "Keep")
+        for project in [managed, external] {
+            _ = try store.apply(.addTask(projectID: project.id,
+                task: TaskItem(title: "Keep in Trash 📝", notes: "Original bytes\n", subtasks: [Subtask(title: "Child")]), index: nil))
+            let source = try linkedURL(project.id)
+            // Formatting and comments must survive; Trash is a move, not a re-encoding.
+            let bytes = try Data(contentsOf: source) + Data("\n# preserve this comment\n".utf8)
+            try bytes.write(to: source)
+            let recovered = directory.appendingPathComponent("synthetic-trash-\(project.id).yaml")
+            var calls = 0
+            store.trashListFile = { url in
+                calls += 1
+                XCTAssertEqual(url, source)
+                try FileManager.default.moveItem(at: url, to: recovered)
+                return recovered
+            }
+            try store.deleteList(id: project.id, expectedURL: source)
+            XCTAssertEqual(calls, 1)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+            XCTAssertEqual(try Data(contentsOf: recovered), bytes)
+            let current = try store.load()
+            XCTAssertFalse(current.projects.contains { $0.id == project.id })
+            XCTAssertNil(store.listLocations[project.id])
+            XCTAssertTrue(current.projects.contains { $0.id == survivor.id })
+        }
+    }
+
+    func testDeleteTrashFailureRetainsFileCatalogAndRecoverableContent() throws {
+        let project = try XCTUnwrap(store.load().projects.first)
+        let source = try linkedURL(project.id)
+        let bytes = try Data(contentsOf: source)
+        let catalog = try Data(contentsOf: store.catalogURL)
+        store.trashListFile = { _ in throw StoreError.io("Simulated Trash refusal") }
+        XCTAssertThrowsError(try store.deleteList(id: project.id, expectedURL: source)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("remains linked"))
+        }
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+        XCTAssertEqual(try Data(contentsOf: store.catalogURL), catalog)
+        XCTAssertEqual(try store.load().projects.first?.id, project.id)
+        XCTAssertNil(store.listIssues[project.id])
+    }
+
+    func testDeleteRejectsLocationChangedAfterConfirmationWithoutTouchingEitherFile() throws {
+        let project = try XCTUnwrap(store.load().projects.first)
+        let confirmed = try linkedURL(project.id)
+        let bytes = try Data(contentsOf: confirmed)
+        let relocated = directory.appendingPathComponent("relocated.yaml")
+        try bytes.write(to: relocated)
+        try newStore().relinkList(id: project.id, to: relocated)
+        var called = false
+        store.trashListFile = { url in called = true; return url }
+        XCTAssertThrowsError(try store.deleteList(id: project.id, expectedURL: confirmed))
+        XCTAssertFalse(called)
+        XCTAssertEqual(try Data(contentsOf: confirmed), bytes)
+        XCTAssertEqual(try Data(contentsOf: relocated), bytes)
+        _ = try store.load()
+        XCTAssertEqual(try linkedURL(project.id), relocated)
+    }
+
+    func testDeleteRejectsReplacedFileWithDifferentIdentityAndMissingFile() throws {
+        let project = try XCTUnwrap(store.load().projects.first)
+        let source = try linkedURL(project.id)
+        let replacement = try ListFileCodec.encode(ListDocument(project: Project(name: "Different list")))
+        try replacement.write(to: source, options: .atomic)
+        var called = false
+        store.trashListFile = { url in called = true; return url }
+        XCTAssertThrowsError(try store.deleteList(id: project.id, expectedURL: source))
+        XCTAssertFalse(called)
+        XCTAssertEqual(try Data(contentsOf: source), replacement)
+        _ = try store.load()
+        XCTAssertNotNil(store.listLocations[project.id])
+        try FileManager.default.removeItem(at: source)
+        XCTAssertThrowsError(try store.deleteList(id: project.id, expectedURL: source))
+        XCTAssertFalse(called)
+        // Hide remains available for a file whose contents/identity cannot be trusted.
+        try store.removeList(id: project.id)
+        XCTAssertNil(store.listLocations[project.id])
+    }
+
+    func testDeleteCatalogFailureAfterTrashKeepsMissingLinkAndActionableRecovery() throws {
+        let project = try XCTUnwrap(store.load().projects.first)
+        let task = TaskItem(title: "Recoverable task")
+        _ = try store.apply(.addTask(projectID: project.id, task: task, index: nil))
+        let source = try linkedURL(project.id)
+        let bytes = try Data(contentsOf: source)
+        let catalog = try Data(contentsOf: store.catalogURL)
+        let recovered = directory.appendingPathComponent("synthetic-trash.yaml")
+        store.trashListFile = { url in
+            try FileManager.default.moveItem(at: url, to: recovered)
+            return recovered
+        }
+        store.beforeDeleteCatalogPublish = { throw StoreError.io("Simulated catalog write failure") }
+        XCTAssertThrowsError(try store.deleteList(id: project.id, expectedURL: source)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Restore it from Trash and Retry, or use Hide List"))
+            XCTAssertTrue(error.localizedDescription.contains(recovered.path))
+        }
+        XCTAssertEqual(try Data(contentsOf: recovered), bytes)
+        XCTAssertEqual(try Data(contentsOf: store.catalogURL), catalog)
+        XCTAssertEqual(try store.load().projects.first?.tasks, [task])
+        XCTAssertTrue(try XCTUnwrap(store.listIssues[project.id]).isMissing)
+        XCTAssertEqual(try linkedURL(project.id), source)
+        try FileManager.default.moveItem(at: recovered, to: source)
+        XCTAssertEqual(try store.load().projects.first?.tasks, [task])
+        XCTAssertNil(store.listIssues[project.id])
+    }
+
     func testDuplicateTaskIdentityIsRejectedOnOpenAndIsolatedOnExternalEdit() throws {
         let first = try XCTUnwrap(store.load().projects.first)
         let shared = TaskItem(title: "Existing")

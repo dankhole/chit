@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import TodoCore
+@testable import TodoCore
 @testable import Chit
 
 @MainActor
@@ -1029,6 +1029,135 @@ final class AppModelTests: XCTestCase {
             XCTAssertTrue(f.model.flushPendingEdits())
             XCTAssertFalse(f.model.hasRetainedDrafts(listID: f.projectID))
             XCTAssertEqual(try storedTask(f).notes, "Draft follows list identity")
+        }
+    }
+
+    func testDeleteSavesTaskEditsAndRetainsUnsubmittedEntriesAcrossRestoreAndRestart() throws {
+        try withFixture { f in
+            let source = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            let recovered = f.root.appendingPathComponent("synthetic-trash.yaml")
+            f.model.setText(itemID: f.task.id, field: .title, value: "Saved before Trash")
+            f.model.setText(itemID: f.task.id, field: .notes, value: "Saved notes")
+            f.model.entryDrafts[f.projectID] = "Unsubmitted task"
+            f.model.setSubtaskEntry(parentID: f.task.id, projectID: f.projectID, value: "Unsubmitted child")
+            f.store.trashListFile = { url in
+                try FileManager.default.moveItem(at: url, to: recovered)
+                return recovered
+            }
+            XCTAssertTrue(f.model.deleteList(id: f.projectID, expectedURL: source))
+            let document = try ListFileCodec.decode(Data(contentsOf: recovered))
+            XCTAssertEqual(document.tasks[0].title, "Saved before Trash")
+            XCTAssertEqual(document.tasks[0].notes, "Saved notes")
+            XCTAssertEqual(document.tasks.count, 1, "Unsubmitted entries remain local work.")
+            XCTAssertTrue(f.model.workspace.projects.isEmpty)
+            XCTAssertTrue(f.model.hasRetainedDrafts(listID: f.projectID))
+            XCTAssertEqual(f.model.entryDrafts[f.projectID], "Unsubmitted task")
+            let reopened = AppModel(store: f.store, preferences: f.preferences, watchChanges: false)
+            try FileManager.default.moveItem(at: recovered, to: source)
+            XCTAssertTrue(reopened.openList(at: source))
+            XCTAssertEqual(reopened.selectedProject?.tasks[0].title, "Saved before Trash")
+            XCTAssertEqual(reopened.entryDrafts[f.projectID], "Unsubmitted task")
+            XCTAssertEqual(reopened.subtaskEntry(parentID: f.task.id, projectID: f.projectID), "Unsubmitted child")
+        }
+    }
+
+    func testDeleteBlocksBlankAndConflictedEditsAndRetainsThemForRetry() throws {
+        try withFixture { f in
+            let source = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            var calls = 0
+            f.store.trashListFile = { url in calls += 1; return url }
+            f.model.setText(itemID: f.task.id, field: .title, value: "")
+            XCTAssertFalse(f.model.deleteList(id: f.projectID, expectedURL: source))
+            XCTAssertEqual(calls, 0)
+            XCTAssertEqual(draft(f), "")
+            XCTAssertNotNil(f.model.location(for: f.projectID))
+            f.model.setText(itemID: f.task.id, field: .title, value: "My edit")
+            _ = try f.external.apply(.patchTask(id: f.task.id,
+                patch: TaskPatch(title: FieldChange(expected: f.task.title, value: "Other edit"))))
+            f.model.refresh()
+            XCTAssertFalse(f.model.deleteList(id: f.projectID, expectedURL: source))
+            XCTAssertEqual(calls, 0)
+            XCTAssertEqual(draft(f), "My edit")
+            XCTAssertEqual(try storedTask(f).title, "Other edit")
+            XCTAssertFalse(f.model.conflicts(itemID: f.task.id).isEmpty)
+        }
+    }
+
+    func testDeleteTrashFailureKeepsSavedEditsAndEntriesLinked() throws {
+        try withFixture { f in
+            let source = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            f.model.setText(itemID: f.task.id, field: .notes, value: "Save this work")
+            f.model.entryDrafts[f.projectID] = "Keep entry"
+            f.store.trashListFile = { _ in throw StoreError.io("Simulated Trash failure") }
+            XCTAssertFalse(f.model.deleteList(id: f.projectID, expectedURL: source))
+            XCTAssertEqual(f.model.location(for: f.projectID)?.url, source)
+            XCTAssertEqual(f.model.selectedProjectID, f.projectID)
+            XCTAssertEqual(try storedTask(f).notes, "Save this work")
+            XCTAssertEqual(f.model.entryDrafts[f.projectID], "Keep entry")
+            XCTAssertTrue(f.model.errorMessage?.contains("remains linked") == true)
+        }
+    }
+
+    func testDeleteCatalogFailureRetainsMissingListEntriesAndRestoresCleanly() throws {
+        try withFixture { f in
+            let source = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            let recovered = f.root.appendingPathComponent("synthetic-trash.yaml")
+            f.model.entryDrafts[f.projectID] = "Keep unfinished work"
+            f.model.setText(itemID: f.task.id, field: .notes, value: "Saved before catalog failure")
+            f.store.trashListFile = { url in
+                try FileManager.default.moveItem(at: url, to: recovered)
+                return recovered
+            }
+            f.store.beforeDeleteCatalogPublish = { throw StoreError.io("Simulated catalog failure") }
+            XCTAssertFalse(f.model.deleteList(id: f.projectID, expectedURL: source))
+            XCTAssertEqual(f.model.selectedProjectID, f.projectID)
+            XCTAssertTrue(f.model.selectedListIssue?.isMissing == true)
+            XCTAssertEqual(f.model.entryDrafts[f.projectID], "Keep unfinished work")
+            XCTAssertTrue(f.model.errorMessage?.contains("Restore it from Trash") == true)
+            XCTAssertEqual(f.model.selectedProject?.tasks.first?.notes, "Saved before catalog failure")
+            try FileManager.default.moveItem(at: recovered, to: source)
+            f.model.refresh()
+            XCTAssertTrue(f.model.isSelectedListAvailable)
+            XCTAssertEqual(f.model.selectedProject?.tasks.first?.notes, "Saved before catalog failure")
+            XCTAssertEqual(f.model.entryDrafts[f.projectID], "Keep unfinished work")
+        }
+    }
+
+    func testDeleteRejectsCapturedPathAfterRelinkingWithoutTrashing() throws {
+        try withFixture { f in
+            let source = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            let replacement = f.root.appendingPathComponent("relinked.yaml")
+            let bytes = try Data(contentsOf: source)
+            try bytes.write(to: replacement)
+            XCTAssertTrue(f.model.relinkList(id: f.projectID, to: replacement))
+            var called = false
+            f.store.trashListFile = { url in called = true; return url }
+            XCTAssertFalse(f.model.deleteList(id: f.projectID, expectedURL: source))
+            XCTAssertFalse(called)
+            XCTAssertEqual(try Data(contentsOf: source), bytes)
+            XCTAssertEqual(try Data(contentsOf: replacement), bytes)
+            XCTAssertEqual(f.model.location(for: f.projectID)?.url, replacement.standardizedFileURL.resolvingSymlinksInPath())
+        }
+    }
+
+    func testDeletePreservesUndoForAnUnrelatedList() throws {
+        try withFixture { f in
+            let source = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            XCTAssertTrue(f.model.createList(name: "Keep"))
+            let survivorID = f.model.selectedProjectID
+            f.model.addTask("Undo this task")
+            XCTAssertTrue(f.model.canUndo)
+            let recovered = f.root.appendingPathComponent("synthetic-trash.yaml")
+            f.store.trashListFile = { url in
+                try FileManager.default.moveItem(at: url, to: recovered)
+                return recovered
+            }
+            XCTAssertTrue(f.model.deleteList(id: f.projectID, expectedURL: source))
+            XCTAssertTrue(f.model.canUndo)
+            f.model.undo()
+            XCTAssertTrue(f.model.workspace.projects.first { $0.id == survivorID }?.tasks.isEmpty == true)
+            XCTAssertNil(f.model.location(for: f.projectID))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: recovered.path))
         }
     }
 

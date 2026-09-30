@@ -42,6 +42,8 @@ struct CatalogMigration: Codable, Equatable {
     var sourceFingerprint: String?
     var originalPath: String?
     var manifestPath: String
+    /// A rebuilt index must not replay move transactions from its discarded navigation state.
+    var catalogRecoveryID: String? = nil
 }
 
 struct MigrationManifest: Codable {
@@ -60,6 +62,7 @@ struct ListMoveRecord: Codable {
     var contentPath: String
     var fingerprint: String
     var phase: String
+    var catalogRecoveryID: String? = nil
 }
 
 func canonicalListURL(_ url: URL) -> URL { url.standardizedFileURL.resolvingSymlinksInPath() }

@@ -38,11 +38,11 @@ For a copy in `~/Applications`, use `$HOME/Applications/Chit.app/Contents/Resour
 
 - Type in **Add a task…** and press Return. Its circle toggles completion. Completed tasks move to the collapsible **Completed** section at the bottom.
 - Click a title to expand optional notes and subtasks inline. Notes are plain text with clickable links. Return commits titles; Shift-Return inserts a line break. Parent and child completion remain independent.
-- Use **+ → New List…** to enter a name and choose **In app** or **Choose folder…**. Folder saving suggests `todo.yaml`; existing files are never silently replaced.
+- **New List → In Chit** asks for a name and saves the list in app storage. **New List → Choose Folder…** opens a folder browser first, then a native save dialog for the filename, optional Finder tags, and destination. These are movable windows kept on screen, even when Chit sits at the screen edge. The chosen filename supplies the initial list name. Existing files are never silently replaced.
 - **Open List…** opens an existing YAML file in place. A small folder icon identifies lists saved in chosen folders. App-managed lists use plain tab labels.
 - Drag tabs to reorder them or place them in collapsible groups. Grouping changes the local organization, not the files' locations.
-- List menus offer **Show in Finder**, **Copy File Path**, **Move File…**, and **Remove from App**. Removing a list leaves its file intact. Renaming its label does not rename the file. Use **Locate…** when a file has moved outside Chit.
-- Click the menu-bar checklist or press **Control-Option-Space** to show or hide the panel. Change the shortcut from the app menu. Close, Command-W, and Escape hide the panel; Command-Q quits.
+- List menus offer **Show in Finder**, **Copy File Path**, and **Move File…**. **Hide List** removes its tab but keeps the file; use **Open List…** to bring it back. **Delete List…** asks for confirmation before moving the list file and its tasks to macOS Trash. This also applies to files saved in repositories. Renaming a list does not rename its file. Use **Locate…** when a file has moved outside Chit.
+- Click the menu-bar checklist or press **Control-Option-Space** to show or hide the panel. Change the shortcut from the app menu. Close, Command-W, and Escape hide the panel; Command-Q quits. While a file picker is open, Command-W or Escape cancels that picker. Hiding or quitting Chit also cancels its file picker.
 - Right-click the menu-bar checklist → **Settings…** to adjust background opacity from 30–100%. Text and controls remain opaque. Command-comma also opens settings.
 
 The panel has no Dock icon, native shadow, or hard outline. The centered hide button shares a compact header with the tabs. Empty header space moves the panel; edges resize it. Text saves after a short pause. Native text Undo and task/group Undo remain available. Window state, list selection, expanded details, and unfinished drafts stay local to the app.
@@ -75,9 +75,13 @@ The default legacy anchor remains `~/Library/Application Support/TotTodo/workspa
 
 Keep old app and command copies closed after migration; they cannot understand the new catalog. Existing repo `todo.md` files are never automatically deleted or converted. Use **Move File…** to move a migrated list into its repository when ready.
 
-The preferences domain remains `local.dcole.TotTodo`. File locks/backups/recovery use `~/Library/Application Support/Chit/file-state/` so ordinary editing does not add backup trees to repositories. Remove from App unlinks only; file deletion remains a Finder action. Do not delete the Application Support folders for a reset unless you also intend to remove app-managed lists and recovery data.
+The preferences domain remains `local.dcole.TotTodo`. File locks/backups/recovery use `~/Library/Application Support/Chit/file-state/` so ordinary editing does not add backup trees to repositories. Hide List keeps the original file. Delete List moves it to Trash; restore it in Finder and use Open List to bring it back. Do not delete the Application Support folders for a reset unless you also intend to remove app-managed lists and recovery data.
 
 Both app and command accept the legacy `--store PATH` catalog-anchor override. `CHIT_STORE`, then `TOT_TODO_STORE`, provide defaults. Tests use isolated locations; ordinary `--file` list access does not depend on catalog registration.
+
+If the list index cannot load, choose **Rebuild List Index…**. Review the surviving lists Chit finds, deselect any you want to keep hidden, and use **Choose List Files…** to include files saved elsewhere. Rebuilding preserves the damaged index before replacing it, leaves YAML and the legacy workspace untouched, and retains local drafts. Groups and tab order reset. Files with invalid content, missing IDs, or conflicting identities are reported rather than changed automatically.
+
+If no lists can be recovered, **Start Empty** creates a usable empty index while keeping the existing files. Use **Open List…** later to reconnect a repaired or restored file. Rebuilding an index cannot recreate missing task content; that requires another copy. Direct CLI `--file` access continues to work independently of the index. A missing index after a completed cutover is treated as a recovery case, so it cannot silently recreate lists from an older workspace.
 
 ## Verification
 
@@ -86,11 +90,15 @@ CHIT_DIRECT_BUILD=1 scripts/test.sh
 python3 Tests/CLI/integration.py
 ```
 
-The completed cutover passes 141 automated tests: 69 core/storage tests, 52 app-model tests, and 20 CLI integration tests. These cover file round trips, manual additions, expected-value conflicts, atomic replacement, catalog migration/restart, missing and invalid lists, retained drafts, and CLI access. Parallel branch and code-smell reviews are complete, and their findings are addressed.
+The initial cutover passed 141 automated tests: 69 core/storage tests, 52 app-model tests, and 20 CLI integration tests. These cover file round trips, manual additions, expected-value conflicts, atomic replacement, catalog migration/restart, missing and invalid lists, retained drafts, and CLI access. Parallel branch and code-smell reviews of that cutover are complete, and their findings are addressed. The subsequent Hide/Delete update adds 11 regression tests; its affected catalog and app-model suites pass all 76 tests, using synthetic temporary moves rather than real Trash.
+
+Recovery without a backup adds 13 regression tests. All 89 affected storage and app-model tests pass, along with the direct build. These checks cover preserving files and drafts, rebuilding an empty index, stale previews, and restarting after recovery. A [320 × 240-point preview](./outputs/cutover/catalog-recovery.png) verifies the scrollable review layout and visible action buttons; native file selection remains a hands-on check.
 
 The direct-compiler build and native smoke check pass. The smoke check was launched through macOS Launch Services after a direct executable launch failed to take focus; it covers show/hide, menu-bar controls, native editing/Undo, composition guards, drop handlers, resizing, and persistence. Existing data was migrated on normal launch and compared with its pre-cutover backup: list/task content and identities remained intact, original JSON bytes were unchanged, and original preference content was retained.
 
-The native preview/smoke modes require an explicit isolated `--store`; see [cutover previews](./outputs/cutover/README.md) and [capture notes](./outputs/native-ui/README.md). Physical dragging, native file dialogs, VoiceOver, input methods, Spaces, and live blur across desktop backgrounds retain hands-on verification limits.
+The focused native `--file-panel-test` also passes with an isolated catalog. It checks standalone folder/save dialogs at a screen edge, programmatic frame movement, duplicate-request handling, refocusing, Cancel, and Hide/Quit cleanup. Actual title-bar dragging, keyboard delivery to the native panel service, and accepting Choose/Create remain hands-on checks.
+
+The native preview/smoke/file-panel modes require an explicit isolated `--store`; see [cutover previews](./outputs/cutover/README.md) and [capture notes](./outputs/native-ui/README.md). Physical dragging, VoiceOver, input methods, Spaces, and live blur across desktop backgrounds retain hands-on verification limits.
 
 ## Start here
 

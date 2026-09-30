@@ -14,14 +14,20 @@ public final class TodoStore: @unchecked Sendable {
     private let backupInterval: TimeInterval
     private let stateDirectory: URL?
     private var lastGood: [String: Project] = [:]
+    private let catalogRecoveryOwnerID = UUID()
     private var normalizableLists: Set<String> = []
     private var directory: URL { url.deletingLastPathComponent() }
     private var migrationDirectory: URL { url.deletingPathExtension().appendingPathExtension("migration") }
     private var manifestURL: URL { migrationDirectory.appendingPathComponent("manifest.json") }
+    private var cutoverURL: URL { url.deletingPathExtension().appendingPathExtension("cutover.json") }
     private var moveDirectory: URL { migrationDirectory.appendingPathComponent("moves", isDirectory: true) }
     // Test-only interruption seam. Production work does not depend on a process surviving a step.
     var migrationCheckpoint: ((String) throws -> Void)?
     var moveCheckpoint: ((String) throws -> Void)?
+    // Tests move only synthetic files into a temporary recovery folder, never real Trash.
+    var trashListFile: ((URL) throws -> URL)?
+    var beforeDeleteCatalogPublish: (() throws -> Void)?
+    var beforeCatalogRecoveryPublish: (() throws -> Void)?
 
     public static var defaultURL: URL {
         let environment = ProcessInfo.processInfo.environment
@@ -190,6 +196,56 @@ public final class TodoStore: @unchecked Sendable {
         }
     }
 
+    /// The presentation layer must confirm this exact location before calling.
+    /// Deletion uses recoverable macOS Trash and never falls back to permanent removal.
+    public func deleteList(id: String, expectedURL: URL) throws {
+        try locked {
+            let original = try readOrMigrate()
+            let link = try linkedList(id, original)
+            guard expectedURL.isFileURL, link.path == expectedURL.path,
+                  link.url == expectedURL else {
+                throw StoreError.conflict("This list's location changed. Review its current file and confirm Delete List again.")
+            }
+            var updated = original
+            updated.lists.removeAll { $0.id == id }
+            guard updated.revision < Int.max else { throw StoreError.invalid("Revision limit reached.") }
+            updated.revision += 1
+            try updated.validate()
+            try fileStore(link).withLockedDocument { document, bytes in
+                guard let identity = document.id, sameListIdentity(identity, id) else {
+                    throw StoreError.conflict("The file's list identity changed. Locate the correct file before deleting.")
+                }
+                // Cooperative writers are locked; reject an editor's replacement or redirected path.
+                guard canonicalListURL(expectedURL) == expectedURL,
+                      try existingRegularBytes(at: expectedURL) == bytes else {
+                    throw StoreError.conflict("The list file changed before it could move to Trash. Review it and try again.")
+                }
+                let trashedURL: URL
+                do {
+                    if let trashListFile { trashedURL = try trashListFile(expectedURL) }
+                    else {
+                        var result: NSURL?
+                        try FileManager.default.trashItem(at: expectedURL, resultingItemURL: &result)
+                        trashedURL = (result as URL?) ?? expectedURL
+                    }
+                } catch {
+                    throw StoreError.io("Could not move \(expectedURL.path) to Trash. The list remains linked. \(error.localizedDescription)")
+                }
+                do {
+                    try beforeDeleteCatalogPublish?()
+                    try publish(updated)
+                }
+                catch {
+                    // The old catalog still points at the missing file, preserving recovery and drafts.
+                    _ = try? snapshot(original, normalizeMissingIDs: false)
+                    throw StoreError.io("The file moved to Trash (\(trashedURL.path)), but the list could not be hidden. Restore it from Trash and Retry, or use Hide List. \(error.localizedDescription)")
+                }
+            }
+            lastGood.removeValue(forKey: id)
+            _ = try snapshot(updated, normalizeMissingIDs: false)
+        }
+    }
+
     public func relinkList(id: String, to source: URL) throws {
         try locked {
             var catalog = try readOrMigrate()
@@ -227,7 +283,8 @@ public final class TodoStore: @unchecked Sendable {
                 let content = operationDirectory.appendingPathComponent("content.yaml")
                 try FilePersistence.atomicWrite(bytes, to: content)
                 var record = ListMoveRecord(id: operationID, listID: id, sourcePath: link.url.path, destinationPath: target.path,
-                                            contentPath: content.path, fingerprint: contentFingerprint(bytes), phase: "prepared")
+                                            contentPath: content.path, fingerprint: contentFingerprint(bytes), phase: "prepared",
+                                            catalogRecoveryID: catalog.migration.catalogRecoveryID)
                 let recordURL = operationDirectory.appendingPathComponent("operation.json")
                 try FilePersistence.atomicWrite(catalogJSON(record), to: recordURL)
                 _ = try newFileStore(at: target, id: id).createBytes(bytes)
@@ -297,6 +354,132 @@ public final class TodoStore: @unchecked Sendable {
         }
     }
 
+    /// Inspect a damaged/missing local index without normalizing or changing any YAML file.
+    /// Only the managed directory, explicit catalog links, remembered links and chosen files
+    /// are inspected; recovery never searches recursively through the user's disk.
+    public func prepareCatalogRecovery(additionalURLs: [URL] = []) throws -> CatalogRecoveryPlan {
+        try locked {
+            let original = try CatalogRecoveryFileSnapshot.read(at: catalogURL)
+            try requireRecoverableCatalog(original)
+            var sources = try catalogRecoveryManagedURLs()
+            if let original { sources += catalogRecoveryLinkedURLs(in: original.bytes) }
+            sources += listLocations.values.map(\.url)
+            sources += additionalURLs
+            var issues: [CatalogRecoveryIssue] = []
+            var files: [URL: CatalogRecoveryFileSnapshot] = [:]
+            var projects: [URL: Project] = [:]
+            for source in sources.sorted(by: { $0.path < $1.path }) {
+                guard source.isFileURL else {
+                    issues.append(CatalogRecoveryIssue(url: source, message: "Choose a local .yaml or .yml list file."))
+                    continue
+                }
+                let target = canonicalListURL(source)
+                if files[target] != nil { continue }
+                do {
+                    try requireYAMLPath(target)
+                    guard source.standardizedFileURL.path == target.path else {
+                        throw StoreError.invalid("This path contains a symbolic link. Choose the original file at \(target.path) and refresh the preview.")
+                    }
+                    guard let file = try CatalogRecoveryFileSnapshot.read(at: target) else {
+                        throw StoreError.notFound("The list file is missing. Locate it with Choose List Files… and refresh the preview.")
+                    }
+                    let document = try ListFileCodec.decode(file.bytes)
+                    guard !document.hasMissingIDs else {
+                        throw StoreError.invalid("This file has missing list or task IDs. Normalize its IDs explicitly before rebuilding; recovery leaves its bytes unchanged.")
+                    }
+                    let project = try document.asProject()
+                    try Workspace(projects: [project]).validate()
+                    files[target] = file; projects[target] = project
+                } catch {
+                    issues.append(CatalogRecoveryIssue(url: source, message: error.localizedDescription))
+                }
+            }
+            // Exclude every participant in a conflict. File order cannot select a winner.
+            var identityOwners: [String: Set<URL>] = [:]
+            for (target, project) in projects {
+                let identities = [project.id] + project.tasks.flatMap { [$0.id] + $0.subtasks.map(\.id) }
+                for id in identities {
+                    identityOwners[UUID(uuidString: id)!.uuidString, default: []].insert(target)
+                }
+            }
+            for (identity, owners) in identityOwners.sorted(by: { $0.key < $1.key }) where owners.count > 1 {
+                for target in owners.sorted(by: { $0.path < $1.path }) {
+                    let others = owners.filter { $0 != target }.map(\.path).sorted().joined(separator: ", ")
+                    let isListID = projects[target].map { sameListIdentity($0.id, identity) } ?? false
+                    issues.append(CatalogRecoveryIssue(url: target,
+                        message: "Duplicate \(isListID ? "list" : "item") ID \(identity) also appears in \(others). Every conflicting file was skipped. Choose the correct copy, or give an independent copy new IDs, then refresh the preview."))
+                }
+            }
+            let conflicting = Set(identityOwners.values.filter { $0.count > 1 }.flatMap { $0 })
+            for target in conflicting { files.removeValue(forKey: target); projects.removeValue(forKey: target) }
+            let candidates = projects.keys.sorted(by: { $0.path < $1.path }).map { target in
+                CatalogRecoveryCandidate(id: projects[target]!.id, name: projects[target]!.name, url: target, isManaged: isManaged(target))
+            }
+            guard try CatalogRecoveryFileSnapshot.read(at: catalogURL) == original else {
+                throw StoreError.conflict("The catalog changed while preparing recovery. Refresh the preview.")
+            }
+            return CatalogRecoveryPlan(candidates: candidates, issues: issues.sorted { $0.url.path < $1.url.path },
+                                       catalogURL: catalogURL, ownerID: catalogRecoveryOwnerID,
+                                       state: CatalogRecoveryState(catalog: original, files: files, projects: projects))
+        }
+    }
+
+    /// Publish only the caller's explicit selection. An empty selection creates a usable
+    /// empty index so lists can be added/reopened later; every existing file is preserved.
+    public func rebuildCatalog(using plan: CatalogRecoveryPlan, selectedURLs: [URL]) throws -> CatalogRecoveryResult {
+        try locked {
+            let state = try plan.checkedState(ownerID: catalogRecoveryOwnerID, catalogURL: catalogURL)
+            let selected = Set(selectedURLs)
+            guard selectedURLs.allSatisfy({ $0.isFileURL && state.files[$0] != nil }) else {
+                throw StoreError.invalid("A selected file is not in this recovery preview. Add it and refresh the preview first.")
+            }
+            let candidates = plan.candidates.filter { selected.contains($0.url) }
+            try checkCatalogRecoveryState(state, candidates: candidates)
+            return try withCatalogRecoveryFileLocks(candidates, index: 0) {
+                try checkCatalogRecoveryState(state, candidates: candidates)
+                let links = candidates.map {
+                    CatalogList(id: $0.id, path: $0.url.path, isManaged: $0.isManaged, groupID: nil, lastKnownName: $0.name)
+                }
+                var migration = try catalogRecoveryMigration(originalBytes: state.catalog?.bytes)
+                migration.catalogRecoveryID = UUID().uuidString
+                let rebuilt = ListCatalog(revision: 0, groups: [], lists: links, migration: migration)
+                try rebuilt.validate()
+                let workspace = Workspace(projects: candidates.map { state.projects[$0.url]! })
+                try workspace.validate()
+                let replacement = try catalogJSON(rebuilt)
+                let preserved: URL?
+                if let original = state.catalog {
+                    let copy = directory.appendingPathComponent(catalogURL.lastPathComponent + ".recovery-" + UUID().uuidString + ".json")
+                    // A durable, exclusive byte-for-byte copy is required before replacement.
+                    try FilePersistence.atomicCreate(original.bytes, to: copy)
+                    guard try existingRegularBytes(at: copy) == original.bytes else {
+                        throw StoreError.io("The damaged catalog's recovery copy could not be verified. The catalog was not replaced.")
+                    }
+                    preserved = copy
+                } else { preserved = nil }
+                if state.catalog == nil {
+                    try beforeCatalogRecoveryPublish?()
+                    try checkCatalogRecoveryState(state, candidates: candidates)
+                    try FilePersistence.atomicCreate(replacement, to: catalogURL)
+                } else {
+                    try FilePersistence.atomicWrite(replacement, to: catalogURL) {
+                        try self.beforeCatalogRecoveryPublish?()
+                        try self.checkCatalogRecoveryState(state, candidates: candidates)
+                    }
+                }
+                migrationWarning = nil
+                do { try finishMigration(rebuilt) }
+                catch { appendWarning("The rebuilt catalog is committed, but migration recovery metadata could not be finalized: \(error.localizedDescription).") }
+                // Reflect exactly the validated preview. Do not normalize or restore cached tasks.
+                listLocations = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, ListLocation(id: $0.id, url: $0.url, isManaged: $0.isManaged)) })
+                listIssues = [:]; normalizableLists = []
+                lastGood = Dictionary(uniqueKeysWithValues: workspace.projects.map { ($0.id, $0) })
+                observedDirectories = Array(Set([directory] + candidates.map { $0.url.deletingLastPathComponent() })).sorted { $0.path < $1.path }
+                return CatalogRecoveryResult(workspace: workspace, preservedCatalogURL: preserved)
+            }
+        }
+    }
+
     private func locked<T>(_ body: () throws -> T) throws -> T {
         try FilePersistence.makeDirectory(directory)
         // Retaining the old lock also cooperates with installed old binaries during staging.
@@ -341,12 +524,66 @@ public final class TodoStore: @unchecked Sendable {
 }
 
 private extension TodoStore {
+    func catalogRecoveryManagedURLs() throws -> [URL] {
+        try catalogRecoveryYAMLFiles(in: managedDirectory)
+    }
+
+    func checkCatalogRecoveryState(_ state: CatalogRecoveryState, candidates: [CatalogRecoveryCandidate]) throws {
+        let current = try CatalogRecoveryFileSnapshot.read(at: catalogURL)
+        try requireRecoverableCatalog(current)
+        guard current == state.catalog else {
+            throw StoreError.conflict("The catalog changed after this preview. Refresh the preview before rebuilding.")
+        }
+        _ = try catalogRecoveryManagedURLs()
+        for candidate in candidates {
+            guard canonicalListURL(candidate.url).path == candidate.url.path,
+                  try CatalogRecoveryFileSnapshot.read(at: candidate.url) == state.files[candidate.url] else {
+                throw StoreError.conflict("The selected file changed after this preview: \(candidate.url.path). Refresh the preview before rebuilding.")
+            }
+        }
+    }
+
+    func withCatalogRecoveryFileLocks<T>(_ candidates: [CatalogRecoveryCandidate], index: Int, _ body: () throws -> T) throws -> T {
+        guard index < candidates.count else { return try body() }
+        return try newFileStore(at: candidates[index].url, id: candidates[index].id).withLockedDocument { _, _ in
+            try withCatalogRecoveryFileLocks(candidates, index: index + 1, body)
+        }
+    }
+
+    func catalogRecoveryMigration(originalBytes: Data?) throws -> CatalogMigration {
+        if let marker = try existingRegularBytes(at: cutoverURL),
+           let migration = try? JSONDecoder().decode(CatalogMigration.self, from: marker) {
+            return migration
+        }
+        if let originalBytes, let root = try? JSONSerialization.jsonObject(with: originalBytes) as? [String: Any],
+           let value = root["migration"], JSONSerialization.isValidJSONObject(value),
+           let bytes = try? JSONSerialization.data(withJSONObject: value),
+           let migration = try? JSONDecoder().decode(CatalogMigration.self, from: bytes) {
+            return migration
+        }
+        if let bytes = try existingRegularBytes(at: manifestURL),
+           let manifest = try? JSONDecoder().decode(MigrationManifest.self, from: bytes) {
+            return CatalogMigration(sourceFingerprint: manifest.sourceFingerprint, originalPath: manifest.originalPath, manifestPath: manifestURL.path)
+        }
+        // With no surviving baseline metadata, do not invent a legacy-write warning from
+        // the mere presence of old JSON. Its bytes remain untouched and become the baseline.
+        let legacy = try existingRegularBytes(at: url)
+        return CatalogMigration(sourceFingerprint: legacy.map(contentFingerprint), originalPath: nil, manifestPath: manifestURL.path)
+    }
+
     func readOrMigrate() throws -> ListCatalog {
         if let bytes = try existingRegularBytes(at: catalogURL) {
             let catalog = try decodeCatalog(bytes)
             do { try finishMigration(catalog) }
             catch { appendWarning("Migration recovery metadata could not be finalized: \(error.localizedDescription). The committed catalog and YAML remain authoritative.") }
             return catalog
+        }
+        // A committed cutover must never remigrate stale task copies from legacy JSON.
+        let cutover = try existingRegularBytes(at: cutoverURL)
+        let existingManifest = try existingRegularBytes(at: manifestURL)
+        let migrationCompleted = existingManifest.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["completed"] as? Bool == true
+        if cutover != nil || migrationCompleted {
+            throw StoreError.corrupt("The committed list catalog is missing. Rebuild the catalog from existing YAML files; the legacy workspace will not be migrated again.")
         }
         try FilePersistence.makeDirectory(migrationDirectory)
         var manifest: MigrationManifest
@@ -430,9 +667,8 @@ private extension TodoStore {
                 try FilePersistence.atomicWrite(catalogJSON(manifest), to: manifestURL)
             }
         }
-        let marker = url.deletingPathExtension().appendingPathExtension("cutover.json")
-        if try existingRegularBytes(at: marker) == nil {
-            try FilePersistence.atomicCreate(catalogJSON(catalog.migration), to: marker)
+        if try existingRegularBytes(at: cutoverURL) == nil {
+            try FilePersistence.atomicCreate(catalogJSON(catalog.migration), to: cutoverURL)
         }
     }
 
@@ -547,6 +783,7 @@ private extension TodoStore {
             var record: ListMoveRecord
             do { record = try JSONDecoder().decode(ListMoveRecord.self, from: data) }
             catch { appendWarning("A move recovery record could not be read: \(recordURL.path). Files were preserved."); continue }
+            guard record.catalogRecoveryID == catalog.migration.catalogRecoveryID else { continue }
             guard !["completed", "sourceRetained", "abandoned"].contains(record.phase) else { continue }
             guard let index = catalog.lists.firstIndex(where: { $0.id == record.listID }) else { continue }
             do {

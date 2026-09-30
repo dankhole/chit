@@ -21,6 +21,10 @@ final class AppModel: ObservableObject {
         let notes: String
     }
 
+    struct CatalogRecoveryNotice {
+        let preservedCatalogURL: URL?
+    }
+
     /// A single stable-ID collection lets a native editor move between active and
     /// completed rows without becoming a different SwiftUI child.
     enum TaskListEntry: Identifiable, Equatable {
@@ -68,6 +72,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var listLocations: [String: ListLocation] = [:]
     @Published private(set) var listIssues: [String: ListIssue] = [:]
     @Published private(set) var isStoreAvailable = false
+    @Published private(set) var isCatalogRecoveryPresented = false
+    @Published private(set) var catalogRecoveryPlan: CatalogRecoveryPlan?
+    @Published private(set) var catalogRecoverySelectedURLs: Set<URL> = []
+    @Published private(set) var catalogRecoveryErrorMessage: String?
+    @Published private(set) var catalogRecoveryNotice: CatalogRecoveryNotice?
     @Published private(set) var backgroundOpacity = 0.80
     @Published private var drafts: [String: Draft] = [:]
     @Published private var editConflicts: [String: EditConflict] = [:]
@@ -78,10 +87,11 @@ final class AppModel: ObservableObject {
     private var autosave: Task<Void, Never>?
     private var watchers: [String: StorePathWatcher] = [:]
     private var observationRefresh: Task<Void, Never>?
+    private var additionalCatalogRecoveryURLs: Set<URL> = []
     private let watchChanges: Bool
     private static let backgroundOpacityKey = "appearance.backgroundOpacity"
     private static let completedCompositionMessage = "Finish the current text composition before hiding completed tasks."
-    private static let removeCompositionMessage = "Finish the current text composition before removing this list."
+    private static let removeCompositionMessage = "Finish the current text composition before hiding this list."
 
     init(store: TodoStore = TodoStore(), preferences: UserDefaults = .standard, watchChanges: Bool = true) {
         self.store = store
@@ -112,6 +122,7 @@ final class AppModel: ObservableObject {
     var selectedProject: Project? { workspace.projects.first { $0.id == selectedProjectID } }
     var selectedListIssue: ListIssue? { listIssues[selectedProjectID] }
     var isSelectedListAvailable: Bool { isStoreAvailable && selectedProject != nil && selectedListIssue == nil }
+    var hasRetainedWork: Bool { !drafts.isEmpty || entryDrafts.values.contains { !$0.isEmpty } }
 
     func location(for id: String) -> ListLocation? { listLocations[id] }
     func issue(for id: String) -> ListIssue? { listIssues[id] }
@@ -417,6 +428,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Save edited tasks, while retaining unfinished task/subtask entries locally.
+    /// Run before opening the confirmation and again after it returns.
+    @discardableResult
+    func prepareListDeletion(id: String, expectedURL: URL) -> Bool {
+        guard isStoreAvailable, location(for: id)?.url == expectedURL else {
+            errorMessage = "This list's location changed. Review its current file and confirm Delete List again."
+            return false
+        }
+        guard issue(for: id) == nil else {
+            errorMessage = "This list is unavailable. Locate or retry its file before deleting, or use Hide List."
+            return false
+        }
+        if selectedProjectID == id, let editor = NSApp?.keyWindow?.firstResponder as? NSTextView, editor.hasMarkedText() {
+            errorMessage = "Finish the current text composition before deleting this list."
+            return false
+        }
+        for key in drafts.keys.sorted() {
+            guard let draft = drafts[key], (draft.projectID ?? projectID(for: draft.itemID)) == id else { continue }
+            guard flushDraft(key) else { persistPreferences(); return false }
+        }
+        persistPreferences()
+        return true
+    }
+
+    @discardableResult
+    func deleteList(id: String, expectedURL: URL) -> Bool {
+        guard prepareListDeletion(id: id, expectedURL: expectedURL) else { return false }
+        return listAction {
+            try store.deleteList(id: id, expectedURL: expectedURL)
+            adopt(try store.load())
+        }
+    }
+
     private func listAction(_ action: () throws -> Void) -> Bool {
         guard isStoreAvailable else { return false }
         do {
@@ -541,7 +585,7 @@ final class AppModel: ObservableObject {
     func flushEditsForDismissal() -> Bool {
         autosave?.cancel()
         autosave = nil
-        guard isStoreAvailable else { persistPreferences(); return drafts.isEmpty }
+        guard isStoreAvailable else { persistPreferences(); return true }
         let saved = flushAvailableEdits()
         persistPreferences()
         return saved
@@ -551,13 +595,105 @@ final class AppModel: ObservableObject {
         do {
             let latest = try store.load()
             isStoreAvailable = true
+            cancelCatalogRecovery()
             errorMessage = store.migrationWarning
             adopt(latest)
         } catch {
             isStoreAvailable = false
+            autosave?.cancel()
+            autosave = nil
             startWatcherIfNeeded()
             report(error)
         }
+    }
+
+    /// Catalog recovery is deliberately separate from ordinary per-list backups.
+    /// Preparing a preview never flushes drafts or changes a list file.
+    @discardableResult
+    func beginCatalogRecovery() -> Bool {
+        guard !isStoreAvailable, !hasActiveTextComposition else { return false }
+        isCatalogRecoveryPresented = true
+        return refreshCatalogRecovery()
+    }
+
+    @discardableResult
+    func refreshCatalogRecovery(additionalURLs: [URL] = []) -> Bool {
+        guard !isStoreAvailable, isCatalogRecoveryPresented, !hasActiveTextComposition else { return false }
+        autosave?.cancel()
+        autosave = nil
+        additionalCatalogRecoveryURLs.formUnion(additionalURLs)
+        do {
+            let plan = try store.prepareCatalogRecovery(additionalURLs: Array(additionalCatalogRecoveryURLs))
+            let nextURLs = Set(plan.candidates.map(\.url))
+            if let previous = catalogRecoveryPlan {
+                let previousURLs = Set(previous.candidates.map(\.url))
+                // Refreshes retain explicit exclusions, including hidden lists
+                // rediscovered in the managed folder. Newly chosen files start selected.
+                catalogRecoverySelectedURLs = catalogRecoverySelectedURLs.intersection(nextURLs)
+                    .union(nextURLs.subtracting(previousURLs))
+            } else {
+                catalogRecoverySelectedURLs = nextURLs
+            }
+            catalogRecoveryPlan = plan
+            catalogRecoveryErrorMessage = nil
+            persistPreferences()
+            return true
+        } catch {
+            catalogRecoveryErrorMessage = error.localizedDescription
+            persistPreferences()
+            return false
+        }
+    }
+
+    func setCatalogRecoverySelection(_ url: URL, isSelected: Bool) {
+        guard catalogRecoveryPlan?.candidates.contains(where: { $0.url == url }) == true else { return }
+        if isSelected { catalogRecoverySelectedURLs.insert(url) }
+        else { catalogRecoverySelectedURLs.remove(url) }
+    }
+
+    func cancelCatalogRecovery() {
+        isCatalogRecoveryPresented = false
+        catalogRecoveryPlan = nil
+        catalogRecoverySelectedURLs = []
+        catalogRecoveryErrorMessage = nil
+        additionalCatalogRecoveryURLs = []
+    }
+
+    @discardableResult
+    func rebuildCatalog() -> Bool {
+        guard !isStoreAvailable, isCatalogRecoveryPresented,
+              let plan = catalogRecoveryPlan, !hasActiveTextComposition else { return false }
+        autosave?.cancel()
+        autosave = nil
+        observationRefresh?.cancel()
+        observationRefresh = nil
+        persistPreferences()
+        do {
+            let result = try store.rebuildCatalog(using: plan, selectedURLs: Array(catalogRecoverySelectedURLs))
+            isStoreAvailable = true
+            listIdentityConflict = nil
+            errorMessage = store.migrationWarning
+            undoManager.removeAllActions()
+            // Retain navigation for an excluded list so reopening it can recover
+            // its local editor state alongside owner-scoped drafts and entries.
+            adopt(result.workspace, preservingRecoveryPreferences: true)
+            catalogRecoveryNotice = CatalogRecoveryNotice(preservedCatalogURL: result.preservedCatalogURL)
+            cancelCatalogRecovery()
+            return true
+        } catch {
+            // A changed catalog or selected file needs another preview. Keep the
+            // current review and its choices visible, with all local work intact.
+            catalogRecoveryErrorMessage = error.localizedDescription
+            persistPreferences()
+            startWatcherIfNeeded()
+            return false
+        }
+    }
+
+    func dismissCatalogRecoveryNotice() { catalogRecoveryNotice = nil }
+
+    private var hasActiveTextComposition: Bool {
+        (NSApp?.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
     }
 
     func undo() {
@@ -573,6 +709,7 @@ final class AppModel: ObservableObject {
     }
 
     func availableBackups(listID: String? = nil) -> [BackupInfo] {
+        guard isStoreAvailable else { return [] }
         let owner = listID ?? selectedProjectID
         guard !owner.isEmpty else { return [] }
         do { return try store.backups(listID: owner) }
@@ -591,6 +728,7 @@ final class AppModel: ObservableObject {
 
     private func scheduleAutosave() {
         autosave?.cancel()
+        guard isStoreAvailable else { autosave = nil; return }
         autosave = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
@@ -679,7 +817,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
     }
 
-    private func adopt(_ latest: Workspace) {
+    private func adopt(_ latest: Workspace, preservingRecoveryPreferences: Bool = false) {
         // Persist ownership before replacing a snapshot; older preferences have no owner.
         var ownedDrafts: [String: Draft] = [:]
         for var draft in drafts.values {
@@ -699,7 +837,8 @@ final class AppModel: ObservableObject {
         if listLocations != store.listLocations { listLocations = store.listLocations }
         if listIssues != store.listIssues { listIssues = store.listIssues }
         let projectIDs = Set(latest.projects.map(\.id))
-        var visibleCompleted = expandedCompletedProjectIDs.intersection(projectIDs)
+        var visibleCompleted = preservingRecoveryPreferences
+            ? expandedCompletedProjectIDs : expandedCompletedProjectIDs.intersection(projectIDs)
         for project in latest.projects {
             if let taskID = expandedTaskIDs[project.id],
                project.tasks.contains(where: { $0.id == taskID && $0.completed }) {
@@ -715,10 +854,12 @@ final class AppModel: ObservableObject {
         if !workspace.projects.contains(where: { $0.id == selectedProjectID }) {
             selectedProjectID = workspace.projects.first?.id ?? ""
         }
-        let groupIDs = Set(workspace.groups.map(\.id))
-        collapsedGroupIDs.formIntersection(groupIDs)
-        expandedTaskIDs = expandedTaskIDs.filter { projectID, taskID in
-            workspace.projects.first(where: { $0.id == projectID })?.tasks.contains(where: { $0.id == taskID }) == true || listIssues[projectID] != nil
+        if !preservingRecoveryPreferences {
+            let groupIDs = Set(workspace.groups.map(\.id))
+            collapsedGroupIDs.formIntersection(groupIDs)
+            expandedTaskIDs = expandedTaskIDs.filter { projectID, taskID in
+                workspace.projects.first(where: { $0.id == projectID })?.tasks.contains(where: { $0.id == taskID }) == true || listIssues[projectID] != nil
+            }
         }
         // Entry text is local unfinished work. Unlinking does not discard it;
         // reopening the same list restores its task and subtask entries.
