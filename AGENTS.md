@@ -4,6 +4,21 @@ This is a personal, non-DraftKings project. Do not use DraftKings internal MCPs,
 infrastructure, or conventions unless explicitly requested. For interface changes,
 follow `UI_STYLING_GUIDE.md` and preserve the simple, polished user experience.
 
+## Agent development and native validation
+
+Use **Chit Lab** for agent builds, native previews, and smoke checks. Follow
+`docs/CHIT_LAB.md` and use `scripts/lab.py` to build and create a disposable
+session. Keep the personal Chit app and its normal build outputs untouched
+during validation. When the user requests applying validated changes, build
+and update the normal app separately, quit it gracefully, and relaunch the
+same app location. Report whether changes are only in Lab or also running in Chit.
+Use the session's scoped CLI and synthetic files; never seed a session from the
+personal catalog. Existing isolated unit tests remain appropriate for core/model
+changes. A fresh Lab session is the reset path.
+Prefer hidden snapshots for layout checks. Use `open`, visible previews, or the
+native interaction harnesses only when validation needs on-screen UI; those
+commands can display windows and native interaction checks can take focus.
+
 ## Keep validation proportional
 
 The user values reliable changes and fast iteration. Avoid turning a small change

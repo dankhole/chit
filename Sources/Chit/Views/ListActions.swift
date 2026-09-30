@@ -224,6 +224,7 @@ enum ListActions {
             throw NSError(domain: "ChitPreview", code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "Could not encode New List preview."])
         }
+        try LabEnvironment.requireAllowed(destination)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: destination, options: .atomic)
         print("Snapshot saved: \(destination.path)")

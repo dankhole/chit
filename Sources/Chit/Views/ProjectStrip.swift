@@ -16,6 +16,15 @@ struct ProjectStrip: View {
             PanelCloseControl()
                 .frame(width: 22, height: 26)
                 .background(HeaderControlBounds())
+            if LabEnvironment.isEnabled {
+                Text("LAB")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Mocha.secondary)
+                    .frame(height: 26)
+                    .padding(.trailing, 4)
+                    .help("Chit Lab · disposable session")
+                    .accessibilityLabel("Chit Lab, disposable session")
+            }
             WrappingStrip {
                 ForEach(model.workspace.projects.filter { $0.groupID == nil }) { project in
                     projectTab(project)

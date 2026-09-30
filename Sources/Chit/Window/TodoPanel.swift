@@ -5,8 +5,57 @@ import SwiftUI
 @MainActor
 final class TodoPanel: NSPanel {
     var dismissPanel: (() -> Void)?
+    private weak var pressedTaskBar: TaskBarClickRegion?
+    private var taskBarDisposition: TitleClickDisposition = .editOnly
+    private var taskBarWasDragged = false
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDragged, pressedTaskBar != nil {
+            taskBarWasDragged = true
+            return
+        }
+        if event.type == .leftMouseUp, let bar = pressedTaskBar {
+            pressedTaskBar = nil
+            if !taskBarWasDragged, taskBarDisposition == .toggleDetails,
+               bar.window === self, bar.containsBarPoint(event.locationInWindow) {
+                bar.onSingleClick()
+            }
+            return
+        }
+        guard event.type == .leftMouseDown else { super.sendEvent(event); return }
+        pressedTaskBar = nil
+        let hitPoint = contentView?.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+        if attachedSheet == nil, let hit = contentView?.hitTest(hitPoint),
+           hit is HeaderDragView || hit is PanelChrome {
+            NotificationCenter.default.post(name: HeaderDragView.blankClick, object: self)
+            // Keep native header dragging while handling all blank clicks at
+            // the same window boundary as the list's blank-space reset.
+            super.sendEvent(event)
+            return
+        }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let views = contentView.map(descendants) ?? []
+        if attachedSheet == nil,
+           let bar = views.compactMap({ $0 as? TaskBarClickRegion }).first(where: { $0.containsBarPoint(event.locationInWindow) }) {
+            if !isKeyWindow { makeKey() }
+            let disposition = bar.onPointerDown()
+            if disposition != .reject {
+                pressedTaskBar = bar
+                taskBarDisposition = disposition
+                taskBarWasDragged = false
+            }
+            return
+        }
+        if attachedSheet == nil,
+           let region = views.compactMap({ $0 as? TaskBlankClickRegion }).first(where: { $0.containsBlankPoint(event.locationInWindow) }) {
+            if !isKeyWindow { makeKey() }
+            _ = region.onBlankClick()
+            return
+        }
+        super.sendEvent(event)
+    }
 
     // Borderless windows have no standard close button; keep all close paths
     // routed through the delegate's save and input-composition guards.
@@ -16,6 +65,72 @@ final class TodoPanel: NSPanel {
         if let editor = firstResponder as? NSTextView, editor.hasMarkedText() { return }
         guard attachedSheet == nil else { return }
         dismissPanel?()
+    }
+}
+
+struct TaskBarClickArea: NSViewRepresentable {
+    let taskID: String
+    var excludedRects: [CGRect]
+    var onPointerDown: () -> TitleClickDisposition
+    var onSingleClick: () -> Void
+
+    func makeNSView(context: Context) -> TaskBarClickRegion { TaskBarClickRegion() }
+    func updateNSView(_ view: TaskBarClickRegion, context: Context) {
+        view.taskID = taskID
+        view.excludedRects = excludedRects
+        view.onPointerDown = onPointerDown
+        view.onSingleClick = onSingleClick
+    }
+}
+
+/// Full task-group bounds participate without covering text or controls.
+final class TaskBarClickRegion: NSView {
+    var taskID = ""
+    var excludedRects: [CGRect] = []
+    var onPointerDown: () -> TitleClickDisposition = { .reject }
+    var onSingleClick: () -> Void = {}
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func containsBarPoint(_ windowPoint: NSPoint) -> Bool {
+        let point = convert(windowPoint, from: nil)
+        guard bounds.contains(point), visibleRect.contains(point),
+              !excludedRects.contains(where: { $0.contains(point) }) else { return false }
+        let content = window?.contentView
+        let hitPoint = content?.superview?.convert(windowPoint, from: nil) ?? windowPoint
+        let hit = content?.hitTest(hitPoint)
+        return !(hit is NSTextView) && !(hit is NSScroller) && !(hit is PanelResizeOverlay)
+            && !(hit is HeaderDragView) && !(hit is PanelChrome)
+    }
+}
+
+struct TaskBlankClickArea: NSViewRepresentable {
+    var excludedRects: [CGRect]
+    var onBlankClick: () -> Bool
+
+    func makeNSView(context: Context) -> TaskBlankClickRegion { TaskBlankClickRegion() }
+    func updateNSView(_ view: TaskBlankClickRegion, context: Context) {
+        view.excludedRects = excludedRects
+        view.onBlankClick = onBlankClick
+    }
+}
+
+/// The panel observes blank coordinates without installing a gesture over
+/// native text or SwiftUI controls. Bounds use the list's own coordinate space.
+final class TaskBlankClickRegion: NSView {
+    var excludedRects: [CGRect] = []
+    var onBlankClick: () -> Bool = { true }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func containsBlankPoint(_ windowPoint: NSPoint) -> Bool {
+        let point = convert(windowPoint, from: nil)
+        guard bounds.contains(point), !excludedRects.contains(where: { $0.contains(point) }) else { return false }
+        // Scrollbars remain ordinary controls even when they overlay a margin.
+        let content = window?.contentView
+        let hitPoint = content?.superview?.convert(windowPoint, from: nil) ?? windowPoint
+        let hit = content?.hitTest(hitPoint)
+        return !(hit is NSScroller) && !(hit is PanelResizeOverlay)
     }
 }
 

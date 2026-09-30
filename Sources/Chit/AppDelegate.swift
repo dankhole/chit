@@ -31,15 +31,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var previewBackdrop: NSWindow?
     private var smokeTest = false
     private var filePanelTest = false
+    private var labResultPath: String?
+    private var labVisibilityOverride: Bool?
+    private var applicationName: String { LabEnvironment.isEnabled ? "Chit Lab" : "Chit" }
+    private var needsVisibleHarness: Bool { smokeTest || filePanelTest || snapshotBackdrop || snapshotNewList }
+    private var showsInterface: Bool { !LabEnvironment.isEnabled || labVisibilityOverride == true || needsVisibleHarness }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
               NSClassFromString("XCTestCase") == nil else { return }
         do { try parseArguments() } catch { exitHarness(error.localizedDescription, code: 64) }
         isHarness = smokeTest || filePanelTest || snapshotPath != nil
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(showsInterface ? .accessory : .prohibited)
         NSApp.appearance = NSAppearance(named: .darkAqua)
-        if let isolatedStorePath {
+        if let suite = LabEnvironment.preferencesSuite {
+            preferences = UserDefaults(suiteName: suite)!
+            model = AppModel(store: TodoStore(url: URL(fileURLWithPath: isolatedStorePath!)), preferences: preferences)
+        } else if let isolatedStorePath {
             // Test and preview launches never change the user's navigation/window preferences.
             // Keep legacy suites so existing isolated-store settings and drafts remain available.
             let suite = "TotTodo.Isolated.\(isolatedStorePath.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) })"
@@ -71,28 +79,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if snapshotPath != nil { panel.setContentSize(snapshotSize ?? NSSize(width: 424, height: 350)); clampWindow() }
         if snapshotContainedBackdrop { NativePreview.containBackdrop(in: panel) }
         makeMainMenu()
-        makeStatusItem()
-        showPanel()
+        if showsInterface {
+            makeStatusItem()
+            showPanel()
+        }
         if snapshotBackdrop { previewBackdrop = NativePreview.makeBackdrop(behind: panel) }
-        if !isHarness { configureShortcut() }
+        if !isHarness && !LabEnvironment.isEnabled { configureShortcut() }
         if isHarness {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.runHarness() }
         }
     }
 
     private func parseArguments() throws {
-        let arguments = Array(CommandLine.arguments.dropFirst())
+        let arguments = try LabEnvironment.configure(arguments: Array(CommandLine.arguments.dropFirst()))
+        if LabEnvironment.isEnabled { isolatedStorePath = TodoStore.defaultURL.path }
         var index = 0
         while index < arguments.count {
             let value = arguments[index]
             switch value {
-            case "--store", "--snapshot", "--snapshot-expand", "--snapshot-size", "--snapshot-collapse":
+            case "--store", "--snapshot", "--snapshot-expand", "--snapshot-size", "--snapshot-collapse", "--lab-result":
                 index += 1
                 guard index < arguments.count, !arguments[index].hasPrefix("--") else {
                     throw harnessError("\(value) requires a path.")
                 }
                 let path = (arguments[index] as NSString).expandingTildeInPath
                 if value == "--store" { isolatedStorePath = path }
+                else if value == "--lab-result" {
+                    guard LabEnvironment.isEnabled else { throw harnessError("--lab-result is available only in Chit Lab.") }
+                    try LabEnvironment.requireAllowed(URL(fileURLWithPath: path))
+                    labResultPath = path
+                }
                 else if value == "--snapshot-expand" { snapshotExpandedTask = arguments[index] }
                 else if value == "--snapshot-collapse" { snapshotCollapsedGroups.append(arguments[index]) }
                 else if value == "--snapshot-size" {
@@ -105,6 +121,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 else { snapshotPath = path }
             case "--smoke-test": smokeTest = true
             case "--file-panel-test": filePanelTest = true
+            case "--lab-hidden", "--lab-visible":
+                guard LabEnvironment.isEnabled else { throw harnessError("\(value) is available only in Chit Lab.") }
+                let visible = value == "--lab-visible"
+                if let previous = labVisibilityOverride, previous != visible {
+                    throw harnessError("Choose either --lab-hidden or --lab-visible.")
+                }
+                labVisibilityOverride = visible
             case "--snapshot-solid": snapshotSolid = true
             case "--snapshot-contrast": snapshotContrast = true
             case "--snapshot-backdrop": snapshotBackdrop = true
@@ -116,6 +139,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             index += 1
         }
+        if let isolatedStorePath { try LabEnvironment.requireAllowed(URL(fileURLWithPath: isolatedStorePath)) }
+        if let snapshotPath { try LabEnvironment.requireAllowed(URL(fileURLWithPath: snapshotPath)) }
+        if labVisibilityOverride == false && needsVisibleHarness {
+            throw harnessError("This native check requires visible windows; omit --lab-hidden. Ordinary snapshots support hidden rendering.")
+        }
+        if labResultPath != nil && !(smokeTest || filePanelTest || snapshotPath != nil) {
+            throw harnessError("--lab-result requires a snapshot, smoke test, or file-panel test.")
+        }
         if (smokeTest || filePanelTest || snapshotPath != nil) && isolatedStorePath == nil {
             throw harnessError("--smoke-test, --file-panel-test and --snapshot require --store with an isolated workspace path.")
         }
@@ -126,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makePanel() {
         panel = TodoPanel(contentRect: NSRect(x: 0, y: 0, width: 424, height: 350), styleMask: [.borderless], backing: .buffered, defer: false)
-        panel.title = "Chit"
+        panel.title = applicationName
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.level = .floating
@@ -162,12 +193,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func makeMainMenu() {
         let menu = NSMenu()
         let appItem = NSMenuItem()
-        let appMenu = NSMenu(title: "Chit")
+        let appMenu = NSMenu(title: applicationName)
         appMenu.addItem(item("Settings…", action: #selector(showSettings), key: ","))
-        appMenu.addItem(item("Global Shortcut…", action: #selector(editShortcut)))
+        if !LabEnvironment.isEnabled { appMenu.addItem(item("Global Shortcut…", action: #selector(editShortcut))) }
         appMenu.addItem(.separator())
-        appMenu.addItem(item("Hide Chit", action: #selector(hideFromMenu), key: "h"))
-        appMenu.addItem(item("Quit Chit", action: #selector(quit), key: "q"))
+        appMenu.addItem(item("Hide \(applicationName)", action: #selector(hideFromMenu), key: "h"))
+        appMenu.addItem(item("Quit \(applicationName)", action: #selector(quit), key: "q"))
         appItem.submenu = appMenu
         menu.addItem(appItem)
         let file = NSMenuItem()
@@ -194,9 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func makeStatusItem() {
-        let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        status.button?.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: "Chit")
-        status.button?.toolTip = "Chit — click to show or hide; right-click for settings"
+        let status = NSStatusBar.system.statusItem(withLength: LabEnvironment.isEnabled ? NSStatusItem.variableLength : NSStatusItem.squareLength)
+        status.button?.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: applicationName)
+        if LabEnvironment.isEnabled { status.button?.title = " Lab" }
+        status.button?.toolTip = "\(applicationName) — click to show or hide; right-click for settings"
         status.button?.target = self
         status.button?.action = #selector(statusClicked)
         status.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -207,11 +239,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settingsPopover?.performClose(nil)
         if NSApp.currentEvent?.type == .rightMouseUp, let statusItem {
             let menu = NSMenu()
-            menu.addItem(item(panel.isVisible ? "Hide Chit" : "Show Chit", action: #selector(toggleFromMenu)))
+            menu.addItem(item(panel.isVisible ? "Hide \(applicationName)" : "Show \(applicationName)", action: #selector(toggleFromMenu)))
             menu.addItem(item("Settings…", action: #selector(showSettings)))
-            menu.addItem(item("Global Shortcut…", action: #selector(editShortcut)))
+            if !LabEnvironment.isEnabled { menu.addItem(item("Global Shortcut…", action: #selector(editShortcut))) }
             menu.addItem(.separator())
-            menu.addItem(item("Quit Chit", action: #selector(quit)))
+            menu.addItem(item("Quit \(applicationName)", action: #selector(quit)))
             statusItem.menu = menu
             statusItem.button?.performClick(nil)
             statusItem.menu = nil
@@ -257,6 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showPanel() {
+        guard showsInterface else { return }
         if FilePanelPresenter.focusActivePanel() { return }
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApplication = front
@@ -293,6 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func saveGeometry() { if let panel { preferences.set(NSStringFromRect(panel.frame), forKey: "window.frame") } }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard showsInterface else { return false }
         if panel != nil { showPanel() }
         return true
     }
@@ -323,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func configureShortcut() {
+        guard !LabEnvironment.isEnabled else { return }
         if preferences.bool(forKey: "shortcut.disabled") { shortcutValue = nil }
         else if preferences.object(forKey: "shortcut.keyCode") != nil {
             shortcutValue = ShortcutValue(keyCode: UInt32(preferences.integer(forKey: "shortcut.keyCode")), modifiers: UInt32(preferences.integer(forKey: "shortcut.modifiers")), label: preferences.string(forKey: "shortcut.label") ?? "Custom")
@@ -335,6 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func editShortcut() {
+        guard !LabEnvironment.isEnabled else { return }
         showPanel()
         guard recorder == nil else { return }
         let recorder = ShortcutRecorder(current: shortcutValue)
@@ -367,6 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if smokeTest {
                     try exerciseLifecycle()
                     try await exerciseProjectDrag()
+                    try await exerciseTaskRowClicks()
                     let previousExpanded = model.expandedTaskID
                     let title = "Native editor smoke \(UUID().uuidString)"
                     model.addTask(title)
@@ -394,10 +431,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         try await NativePreview.capture(panel: panel, backdrop: previewBackdrop, path: snapshotPath)
                     } else { try saveSnapshot(to: snapshotPath) }
                 }
+                if !showsInterface {
+                    guard !panel.isVisible, statusItem == nil, !NSApp.isActive else {
+                        throw harnessError("Hidden Lab validation unexpectedly displayed UI or took focus.")
+                    }
+                }
                 guard model.flushPendingEdits() else { throw harnessError(model.errorMessage ?? "Final save failed.") }
-                if smokeTest { print("Chit smoke test passed: borderless panel and focus, shortcut toggle, hide/reopen, close control, project tab drops and grouping, pending edits, native typing/Undo, editor retention across completion, marked composition guards, resize geometry, persistence.") }
+                if smokeTest { print("Chit smoke test passed: borderless panel and focus, shortcut toggle, hide/reopen, close control, project tab drops and grouping, task selection/repeated clicks, blank-space reset, native text selection, pending edits, native typing/Undo, editor retention across completion, marked composition guards, resize geometry, persistence.") }
                 previewBackdrop?.orderOut(nil)
                 shortcut?.stop()
+                try writeLabResult(ok: true, message: "Native validation completed.")
                 NSApp.terminate(nil)
             } catch { exitHarness(error.localizedDescription, code: 1) }
         }
@@ -468,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         content.cacheDisplay(in: content.bounds, to: bitmap)
         guard let png = bitmap.representation(using: .png, properties: [:]) else { throw harnessError("Could not encode snapshot PNG.") }
         let destination = URL(fileURLWithPath: path)
+        try LabEnvironment.requireAllowed(destination)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: destination, options: .atomic)
         print("Snapshot saved: \(path)")
@@ -549,6 +593,257 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         try check(try model.store.load() == model.workspace, "Project drops were not persisted.")
     }
 
+    private func exerciseTaskRowClicks() async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func check(_ value: Bool, _ message: String) throws { if !value { throw harnessError(message) } }
+        let originalProject = model.selectedProjectID
+        let originalSize = panel.contentRect(forFrameRect: panel.frame).size
+        let subtask = Subtask(title: "Native row subtask")
+        let task = TaskItem(title: "Native row click selection\n", notes: "Native row notes", subtasks: [subtask])
+        let ordinaryTask = TaskItem(title: "Native ordinary row")
+        let project = Project(name: "Click smoke", tasks: [task, ordinaryTask])
+        _ = try model.store.apply(.addProject(project: project, index: nil))
+        defer {
+            panel.makeFirstResponder(nil)
+            if let current = try? model.store.load().projects.first(where: { $0.id == project.id }) {
+                _ = try? model.store.apply(.deleteProject(id: project.id, expected: current))
+            }
+            model.refresh()
+            model.selectProject(originalProject)
+            panel.setContentSize(originalSize)
+        }
+        model.refresh()
+        model.selectProject(project.id)
+        panel.setContentSize(NSSize(width: 600, height: 500))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        // Lifecycle checks deliberately hand activation to the previous app.
+        // Reestablish native focus after those asynchronous handoffs settle.
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        try check(panel.isKeyWindow && NSApp.isActive,
+                  "Task click check could not establish native focus (key=\(panel.isKeyWindow), active=\(NSApp.isActive)).")
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let root = panel.contentView,
+              let title = descendants(root).compactMap({ $0 as? PlainTextView }).first(where: { $0.editorIdentity == "\(task.id):title" }),
+              let ordinaryTitle = descendants(root).compactMap({ $0 as? PlainTextView }).first(where: { $0.editorIdentity == "\(ordinaryTask.id):title" }) else {
+            throw harnessError("Collapsed native task title was not mounted.")
+        }
+        try check(title.string == task.title && title.bounds.height <= Mocha.textRowHeight + 1 && ordinaryTitle.bounds.height <= Mocha.textRowHeight + 1,
+                  "Collapsed native titles lost trailing-newline content or reserved an unnecessary text row.")
+        let rowDistance = abs(title.convert(title.bounds, to: nil).maxY - ordinaryTitle.convert(ordinaryTitle.bounds, to: nil).maxY)
+        try check(abs(rowDistance - 30) <= 1, "Ordinary collapsed task rows lost their existing 30-point spacing.")
+        let ordinaryUnselectedWidth = ordinaryTitle.bounds.width
+        var eventNumber = 0
+        var deliveredEvents: [String] = []
+        var diagnoseNextBlank = false
+        var blankTrace: [String] = []
+        var blankFocusToRestore: (() -> Bool)?
+        var installedBlankTrace = false
+        let eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .leftMouseDragged]) { event in
+            if event.windowNumber == self.panel.windowNumber {
+                deliveredEvents.append("\(event.type)#\(event.eventNumber) at \(NSStringFromPoint(event.locationInWindow))")
+                if diagnoseNextBlank, event.type == .leftMouseDown,
+                   let region = descendants(root).compactMap({ $0 as? TaskBlankClickRegion }).first(where: { $0.containsBlankPoint(event.locationInWindow) }) {
+                    diagnoseNextBlank = false
+                    installedBlankTrace = true
+                    let originalBlank = region.onBlankClick
+                    let originalTitleFocus = title.onTitleFocus
+                    blankFocusToRestore = originalTitleFocus
+                    title.onTitleFocus = {
+                        blankTrace.append("title focus before: \(clickState())")
+                        let result = originalTitleFocus?() ?? true
+                        blankTrace.append("title focus returned \(result): \(clickState())")
+                        return result
+                    }
+                    region.onBlankClick = { [weak region] in
+                        region?.onBlankClick = originalBlank
+                        blankTrace.append("clear before: \(clickState())")
+                        let result = originalBlank()
+                        blankTrace.append("clear returned \(result): \(clickState())")
+                        return result
+                    }
+                }
+            }
+            return event
+        }
+        defer { if let eventMonitor { NSEvent.removeMonitor(eventMonitor) } }
+        func sendMouse(_ events: [(NSEvent.EventType, NSPoint, Int)]) async throws {
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            // Queue matching mouse-up/drag events before dispatch. NSTextView's
+            // native mouseDown tracking loop consumes them from the app queue.
+            for (index, item) in events.enumerated() {
+                eventNumber += 1
+                guard let event = NSEvent.mouseEvent(with: item.0, location: item.1, modifierFlags: [],
+                                                     timestamp: timestamp + Double(index) * 0.02,
+                                                     windowNumber: panel.windowNumber, context: nil,
+                                                     eventNumber: eventNumber, clickCount: item.2,
+                                                     pressure: item.0 == .leftMouseUp ? 0 : 1) else {
+                    throw harnessError("Could not create a native task mouse event.")
+                }
+                NSApp.postEvent(event, atStart: false)
+            }
+            try await Task.sleep(nanoseconds: 80_000_000)
+            root.layoutSubtreeIfNeeded()
+        }
+        func click(_ point: NSPoint) async throws {
+            try await sendMouse([(.leftMouseDown, point, 1), (.leftMouseUp, point, 1)])
+        }
+        func titlePoint(_ x: CGFloat = 40) -> NSPoint {
+            title.convert(NSPoint(x: x, y: title.textContainerInset.height + 8), to: nil)
+        }
+        func clickState() -> String {
+            let responder = (panel.firstResponder as? PlainTextView)?.editorIdentity
+                ?? panel.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+            return "selected=\(model.selectedTaskIDs[project.id] ?? "nil"), expanded=\(model.expandedTaskID ?? "nil"), responder=\(responder), marked=\((panel.firstResponder as? NSTextView)?.hasMarkedText() ?? false), key=\(panel.isKeyWindow), active=\(NSApp.isActive), mode=\(RunLoop.current.currentMode?.rawValue ?? "nil")"
+        }
+        func pointClassification(_ point: NSPoint) -> String {
+            let hit = root.hitTest(root.superview?.convert(point, from: nil) ?? point)
+            let bars = descendants(root).compactMap { $0 as? TaskBarClickRegion }.filter {
+                $0.bounds.contains($0.convert(point, from: nil))
+            }.map {
+                "task=\($0.taskID), contains=\($0.containsBarPoint(point)), bounds=\(NSStringFromRect($0.convert($0.bounds, to: nil))), visible=\(NSStringFromRect($0.convert($0.visibleRect, to: nil)))"
+            }.joined(separator: "; ")
+            let blanks = descendants(root).compactMap { $0 as? TaskBlankClickRegion }.map {
+                "contains=\($0.containsBlankPoint(point)), exclusions=\($0.excludedRects.count), bounds=\(NSStringFromRect($0.convert($0.bounds, to: nil))), visible=\(NSStringFromRect($0.convert($0.visibleRect, to: nil)))"
+            }.joined(separator: "; ")
+            return "hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil"), point=\(NSStringFromPoint(point)); bars: \(bars); blanks: \(blanks)"
+        }
+        var firstClickTrace: [String] = []
+        let originalPointerDown = title.onTitlePointerDown
+        let originalFocus = title.onTitleFocus
+        title.onTitlePointerDown = {
+            firstClickTrace.append("pointer before: \(clickState())")
+            let result = originalPointerDown?() ?? .editOnly
+            firstClickTrace.append("pointer returned \(result): \(clickState())")
+            return result
+        }
+        title.onTitleFocus = {
+            firstClickTrace.append("focus before: \(clickState())")
+            let result = originalFocus?() ?? true
+            firstClickTrace.append("focus returned \(result): \(clickState())")
+            return result
+        }
+        let blank = root.convert(NSPoint(x: root.bounds.midX, y: 36), to: nil)
+        let firstClickPoint = titlePoint()
+        let beforeFirstClick = clickState()
+        let hit = root.hitTest(root.superview?.convert(firstClickPoint, from: nil) ?? firstClickPoint)
+        let hitClass = hit.map { String(describing: type(of: $0)) } ?? "nil"
+        let regions = descendants(root).compactMap { $0 as? TaskBlankClickRegion }.map {
+            "blank=\($0.containsBlankPoint(firstClickPoint)), exclusions=\($0.excludedRects.count), frame=\(NSStringFromRect($0.convert($0.bounds, to: nil)))"
+        }.joined(separator: "; ")
+        try await click(firstClickPoint)
+        try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil && panel.firstResponder === title,
+                  "First title click did not select and focus editing without expanding details. Before: \(beforeFirstClick). After: \(clickState()). Hit: \(hitClass); title=\(NSStringFromRect(title.convert(title.bounds, to: nil))); point=\(NSStringFromPoint(firstClickPoint)); regions: \(regions); callbacks: \(firstClickTrace).")
+        title.onTitlePointerDown = originalPointerDown
+        title.onTitleFocus = originalFocus
+        try await click(titlePoint())
+        try check(model.expandedTaskID == task.id && descendants(root).contains(where: { $0 === title }),
+                  "A second independent title click did not expand details within 80ms while retaining the native title.")
+        let detailEditors = descendants(root).compactMap { $0 as? PlainTextView }
+        guard let notes = detailEditors.first(where: { $0.editorIdentity == "\(task.id):notes" }),
+              let child = detailEditors.first(where: { $0.editorIdentity == "\(subtask.id):title" }),
+              let addChild = detailEditors.first(where: { $0.editorIdentity == "add-child:\(task.id)" }) else {
+            throw harnessError("Expanded notes and subtask editors were not mounted for row click checks.")
+        }
+        let notesRect = notes.convert(notes.bounds, to: nil)
+        try check(child.convert(child.bounds, to: nil).minY + 1 >= notesRect.maxY && addChild.convert(addChild.bounds, to: nil).minY + 1 >= notesRect.maxY,
+                  "Subtask and Add-subtask editors were not positioned above notes.")
+        try await click(notes.convert(NSPoint(x: 30, y: notes.textContainerInset.height + 8), to: nil))
+        try check(panel.firstResponder === notes && model.expandedTaskID == task.id,
+                  "Clicking notes toggled task details or failed to focus its native editor.")
+        notes.setSelectedRange(NSRange(location: (notes.string as NSString).length, length: 0))
+        notes.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: notes.selectedRange())
+        try await click(NSPoint(x: 8, y: titlePoint().y))
+        try check(notes.hasMarkedText() && panel.firstResponder === notes && model.expandedTaskID == task.id,
+                  "A task bar click collapsed details or moved focus away from notes during native composition.")
+        notes.insertText("あ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try check(model.flushPendingEdits(), "Committing notes composition did not save its draft.")
+        try await click(titlePoint())
+        try check(model.expandedTaskID == nil && model.selectedTaskIDs[project.id] == task.id,
+                  "A later selected title click did not collapse details while retaining row selection.")
+        let wordPoint = titlePoint()
+        try await sendMouse([(.leftMouseDown, wordPoint, 1), (.leftMouseUp, wordPoint, 1)])
+        let expansionAfterFirstClick = model.expandedTaskID
+        try await sendMouse([(.leftMouseDown, titlePoint(), 2), (.leftMouseUp, titlePoint(), 2)])
+        try check(title.selectedRange().length > 0 && model.expandedTaskID == expansionAfterFirstClick,
+                  "The second constituent of a native double-click toggled details or failed to select text.")
+        title.setSelectedRange(NSRange(location: (title.string as NSString).length, length: 0))
+        try await sendMouse([(.leftMouseDown, titlePoint(8), 1), (.leftMouseDragged, titlePoint(92), 1),
+                             (.leftMouseUp, titlePoint(92), 1)])
+        try check(title.selectedRange().length > 0 && model.expandedTaskID == expansionAfterFirstClick,
+                  "Dragging native text selection toggled details or failed to select text.")
+        let beforeBlankClick = clickState()
+        let blankClassification = pointClassification(blank)
+        diagnoseNextBlank = true
+        try await click(blank)
+        if installedBlankTrace { title.onTitleFocus = blankFocusToRestore }
+        try check(model.selectedTaskIDs[project.id] == nil && model.expandedTaskID == nil,
+                  "Blank list space outside task bars did not reset selection and collapse details. Before: \(beforeBlankClick). After: \(clickState()); \(blankClassification); callbacks: \(blankTrace); delivered: \(deliveredEvents.suffix(6)).")
+        for x in [CGFloat(8), root.bounds.width - 8] {
+            let margin = NSPoint(x: x, y: titlePoint().y)
+            try await click(margin)
+            try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
+                      "The task bar margin at x=\(x) did not select without expanding. \(clickState()).")
+            try await click(margin)
+            try check(model.expandedTaskID == task.id,
+                      "The selected task bar margin at x=\(x) did not toggle details within 80ms. \(clickState()).")
+            try await sendMouse([(.leftMouseDown, margin, 2), (.leftMouseUp, margin, 2)])
+            try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
+                      "A rapid repeated background click at x=\(x) did not toggle the selected task bar.")
+            try await click(blank)
+            try check(model.selectedTaskIDs[project.id] == nil && model.expandedTaskID == nil,
+                      "Blank space outside task bars did not collapse a margin-selected task.")
+        }
+        try await click(titlePoint())
+        try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
+                  "First click after blank-space reset expanded task details.")
+        title.setSelectedRange(NSRange(location: (title.string as NSString).length, length: 0))
+        title.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: title.selectedRange())
+        try await click(blank)
+        try check(title.hasMarkedText() && model.selectedTaskIDs[project.id] == task.id && panel.firstResponder === title,
+                  "Blank-space reset discarded a selected title's native composition.")
+        title.insertText("あ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try check(model.flushPendingEdits(), "Committing selected-title composition did not save its draft.")
+        _ = try model.store.apply(.patchTask(id: task.id, patch: TaskPatch(completed: FieldChange(expected: false, value: true))))
+        model.refresh()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        root.layoutSubtreeIfNeeded()
+        try check(model.isCompletedExpanded(projectID: project.id) && descendants(root).contains(where: { $0 === title }) && panel.firstResponder === title,
+                  "External completion hid or replaced the selected collapsed title editor.")
+        let completionPoint = title.convert(NSPoint(x: -14, y: 14), to: nil)
+        try await click(completionPoint)
+        try check(model.selectedProject?.tasks.first?.completed == false && model.expandedTaskID == nil,
+                  "The completion control stopped working or toggled details.")
+        guard let header = descendants(root).compactMap({ $0 as? HeaderDragView }).first,
+              let headerPoint = stride(from: CGFloat(8), to: header.bounds.width - 8, by: CGFloat(8)).map({ NSPoint(x: $0, y: header.bounds.midY) }).first(where: { point in
+                  let windowPoint = header.convert(point, to: nil)
+                  let hitPoint = root.superview?.convert(windowPoint, from: nil) ?? windowPoint
+                  return !header.excludedRects.contains(where: { $0.contains(point) }) && root.hitTest(hitPoint) === header
+              }) else { throw harnessError("No blank native header area was available for selection reset.") }
+        let headerWindowPoint = header.convert(headerPoint, to: nil)
+        let beforeHeaderClick = clickState()
+        let headerClassification = pointClassification(headerWindowPoint)
+        var headerNotifications = 0
+        let headerObserver = NotificationCenter.default.addObserver(forName: HeaderDragView.blankClick, object: panel, queue: nil) { _ in
+            headerNotifications += 1
+        }
+        defer { NotificationCenter.default.removeObserver(headerObserver) }
+        try await click(headerWindowPoint)
+        try check(model.selectedTaskIDs[project.id] == nil && model.expandedTaskID == nil,
+                  "Blank header space did not reset task selection. Before: \(beforeHeaderClick). After: \(clickState()); \(headerClassification); notifications=\(headerNotifications); delivered: \(deliveredEvents.suffix(6)).")
+        try await click(titlePoint())
+        try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
+                  "First title click after header reset expanded details.")
+        try await click(ordinaryTitle.convert(NSPoint(x: 40, y: ordinaryTitle.textContainerInset.height + 8), to: nil))
+        try check(model.selectedTaskIDs[project.id] == ordinaryTask.id && model.expandedTaskID == nil && ordinaryTitle.bounds.width + 20 < ordinaryUnselectedWidth,
+                  "Selecting a task without details did not show its chevron slot.")
+        let ordinaryChevron = ordinaryTitle.convert(NSPoint(x: ordinaryTitle.bounds.maxX + 11, y: 14), to: nil)
+        try await click(ordinaryChevron)
+        try check(model.expandedTaskID == ordinaryTask.id,
+                  "The selected task's chevron did not open its empty details.")
+    }
+
     private func exerciseNativeEditor(taskID: String, title: String) async throws {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         func check(_ value: Bool, _ message: String) throws { if !value { throw harnessError(message) } }
@@ -568,9 +863,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         try check(editor.string == title && model.text(itemID: taskID, field: .title, fallback: title) == title, "Native text Undo did not restore the draft (editor=\(editor.string), draft=\(model.text(itemID: taskID, field: .title, fallback: title))).")
         try check(NSApp.sendAction(Selector(("redo:")), to: nil, from: self), "Native responder rejected Redo.")
         try check(editor.string == typed, "Native text Redo did not restore the edit.")
+        let originalSize = panel.contentRect(forFrameRect: panel.frame).size
+        editor.breakUndoCoalescing()
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        editor.insertText("\nResize this multiline title while keeping its native editor, selection, and Undo history intact. The following notes must stay below every wrapped line.", replacementRange: editor.selectedRange())
+        editor.breakUndoCoalescing()
+        panel.setContentSize(NSSize(width: 320, height: 600))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let notes = descendants(root).compactMap({ $0 as? PlainTextView }).first(where: { $0.editorIdentity == "\(taskID):notes" }),
+              let container = editor.textContainer, let layout = editor.layoutManager else {
+            throw harnessError("Native editor resize check could not find its notes or text layout.")
+        }
+        func checkEditorLayout() throws {
+            layout.ensureLayout(for: container)
+            try check(abs(container.containerSize.width - editor.bounds.width) < 1,
+                      "Rendered text width did not track its editor frame after resize.")
+            let requiredHeight = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY) + 2 * editor.textContainerInset.height
+            try check(editor.bounds.height + 1 >= requiredHeight, "Multiline editor height does not contain its rendered text.")
+            let titleBounds = editor.convert(editor.bounds, to: nil)
+            let notesBounds = notes.convert(notes.bounds, to: nil)
+            try check(titleBounds.minY + 1 >= notesBounds.maxY, "Multiline title overlaps the following notes editor.")
+        }
+        try checkEditorLayout()
+        let narrowWidth = editor.bounds.width
+        let narrowHeight = editor.bounds.height
+        let resizeSelection = editor.selectedRange()
+        panel.setContentSize(NSSize(width: 600, height: 600))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try checkEditorLayout()
+        try check(editor.bounds.width > narrowWidth + 200 && editor.bounds.height < narrowHeight,
+                  "Widening the panel did not expand and reflow the existing editor.")
+        try check(descendants(root).contains(where: { $0 === editor }) && panel.firstResponder === editor && editor.selectedRange() == resizeSelection,
+                  "Resizing replaced the native editor or disrupted focus and selection.")
+        try check(editor.localUndo.canUndo, "Resizing discarded native Undo history.")
+        editor.localUndo.undo()
+        try check(editor.string == typed, "Undo after resizing did not restore the native title.")
+        panel.setContentSize(originalSize)
+        try await Task.sleep(nanoseconds: 100_000_000)
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
         editor.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: editor.selectedRange())
         try check(editor.hasMarkedText(), "Could not establish native marked composition.")
+        let markedSelection = editor.selectedRange()
+        panel.setContentSize(NSSize(width: 600, height: originalSize.height))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try check(editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor,
+                  "Resizing disrupted native marked composition.")
+        panel.setContentSize(originalSize)
         try check(model.text(itemID: taskID, field: .title, fallback: title) == typed, "Provisional composition was published prematurely.")
         try check(!hidePanel() && panel.isVisible, "Marked composition did not prevent hide.")
         try check(applicationShouldTerminate(NSApp) == .terminateCancel, "Marked composition did not prevent normal quit.")
@@ -601,7 +942,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func exitHarness(_ message: String, code: Int32) -> Never {
-        FileHandle.standardError.write(Data("Chit: \(message)\n".utf8))
+        try? writeLabResult(ok: false, message: message)
+        FileHandle.standardError.write(Data("\(applicationName): \(message)\n".utf8))
         Darwin.exit(code)
+    }
+
+    private func writeLabResult(ok: Bool, message: String) throws {
+        guard let labResultPath else { return }
+        let url = URL(fileURLWithPath: labResultPath)
+        try LabEnvironment.requireAllowed(url)
+        let data = try JSONSerialization.data(withJSONObject: ["ok": ok, "message": message], options: [.sortedKeys])
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
     }
 }

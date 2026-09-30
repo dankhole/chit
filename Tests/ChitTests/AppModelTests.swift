@@ -640,6 +640,84 @@ final class AppModelTests: XCTestCase {
         }
     }
 
+    func testTaskSelectionEditsBeforeTogglingDetailsAndResetsOnBlankClick() throws {
+        try withFixture { f in
+            XCTAssertTrue(f.model.selectTaskForEditing(taskID: f.task.id, projectID: f.projectID))
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertNil(f.model.expandedTaskID)
+            XCTAssertTrue(f.model.clickSelectedTaskTitle(taskID: f.task.id, projectID: f.projectID))
+            XCTAssertEqual(f.model.expandedTaskID, f.task.id)
+            XCTAssertTrue(f.model.clickSelectedTaskTitle(taskID: f.task.id, projectID: f.projectID))
+            XCTAssertNil(f.model.expandedTaskID)
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertTrue(f.model.clickSelectedTaskTitle(taskID: f.task.id, projectID: f.projectID))
+            f.model.setText(itemID: f.task.id, field: .title, value: "Saved on blank click")
+
+            XCTAssertTrue(f.model.clearTaskSelection())
+            XCTAssertNil(f.model.selectedTaskID)
+            XCTAssertNil(f.model.expandedTaskID)
+            XCTAssertEqual(try storedTask(f).title, "Saved on blank click")
+            XCTAssertTrue(f.model.selectTaskForEditing(taskID: f.task.id, projectID: f.projectID))
+            XCTAssertNil(f.model.expandedTaskID)
+
+            XCTAssertTrue(f.model.clickSelectedTaskTitle(taskID: f.task.id, projectID: f.projectID))
+            let other = TaskItem(title: "Another task")
+            _ = try f.external.apply(.addTask(projectID: f.projectID, task: other, index: nil))
+            f.model.refresh()
+            XCTAssertTrue(f.model.selectTaskForEditing(taskID: other.id, projectID: f.projectID))
+            XCTAssertEqual(f.model.selectedTaskID, other.id)
+            XCTAssertNil(f.model.expandedTaskID)
+
+            XCTAssertTrue(f.model.toggleDetails(taskID: other.id))
+            let restored = AppModel(store: f.store, preferences: f.preferences, watchChanges: false)
+            XCTAssertNil(restored.selectedTaskID)
+            XCTAssertEqual(restored.expandedTaskID, other.id)
+            XCTAssertTrue(restored.selectTaskForEditing(taskID: other.id, projectID: f.projectID))
+            XCTAssertEqual(restored.expandedTaskID, other.id, "Focusing a restored open task must keep its details open.")
+        }
+    }
+
+    func testTaskSelectionKeepsFailedDraftAccessibleOnCollapseOrSwitch() throws {
+        try withFixture { f in
+            let other = TaskItem(title: "Another task")
+            _ = try f.external.apply(.addTask(projectID: f.projectID, task: other, index: nil))
+            f.model.refresh()
+            XCTAssertTrue(f.model.selectTaskForEditing(taskID: f.task.id, projectID: f.projectID))
+            f.model.setText(itemID: f.task.id, field: .title, value: "")
+            XCTAssertTrue(f.model.clickSelectedTaskTitle(taskID: f.task.id, projectID: f.projectID),
+                          "An invalid title must still allow opening its guidance and conflict controls.")
+
+            XCTAssertFalse(f.model.clearTaskSelection())
+            XCTAssertFalse(f.model.clickSelectedTaskTitle(taskID: f.task.id, projectID: f.projectID))
+            XCTAssertFalse(f.model.selectTaskForEditing(taskID: other.id, projectID: f.projectID))
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertEqual(f.model.expandedTaskID, f.task.id)
+            XCTAssertEqual(draft(f), "")
+            XCTAssertEqual(try storedTask(f).title, f.task.title)
+        }
+    }
+
+    func testTaskSelectionRetainsCollapsedEditorAcrossExternalCompletion() throws {
+        try withFixture { f in
+            XCTAssertTrue(f.model.selectTaskForEditing(taskID: f.task.id, projectID: f.projectID))
+            f.model.setText(itemID: f.task.id, field: .title, value: "")
+            _ = try f.external.apply(.patchTask(id: f.task.id, patch: TaskPatch(completed: FieldChange(expected: false, value: true))))
+            f.model.refresh()
+
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertNil(f.model.expandedTaskID)
+            XCTAssertTrue(f.model.isCompletedExpanded(projectID: f.projectID))
+            XCTAssertTrue(f.model.taskListEntries(projectID: f.projectID).contains(.task(try storedTask(f))))
+            XCTAssertFalse(f.model.toggleCompleted(projectID: f.projectID))
+            XCTAssertEqual(draft(f), "")
+            f.model.setText(itemID: f.task.id, field: .title, value: "Saved before closing Completed")
+            XCTAssertTrue(f.model.toggleCompleted(projectID: f.projectID))
+            XCTAssertNil(f.model.selectedTaskID)
+            XCTAssertFalse(f.model.isCompletedExpanded(projectID: f.projectID))
+            XCTAssertEqual(try storedTask(f).title, "Saved before closing Completed")
+        }
+    }
+
     func testExternalCompletionRevealsExpandedTaskWithoutDiscardingDirtyDraft() throws {
         try withFixture { f in
             f.model.toggleDetails(taskID: f.task.id)

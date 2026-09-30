@@ -20,6 +20,7 @@ struct ListCatalog: Codable, Equatable {
         var paths = Set<String>()
         for list in lists {
             try catalogID(list.id, into: &ids)
+            try LabEnvironment.requireAllowed(URL(fileURLWithPath: list.path))
             guard list.path.hasPrefix("/"), paths.insert(canonicalListURL(URL(fileURLWithPath: list.path)).path).inserted else {
                 throw StoreError.corrupt("Invalid or duplicate linked list path")
             }
@@ -87,6 +88,7 @@ func decodeCatalog(_ bytes: Data) throws -> ListCatalog {
 }
 
 func existingRegularBytes(at url: URL) throws -> Data? {
+    try LabEnvironment.requireAllowed(url)
     var info = stat()
     guard lstat(url.path, &info) == 0 else {
         if errno == ENOENT { return nil }

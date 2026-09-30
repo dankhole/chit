@@ -26,6 +26,8 @@ On this Mac, missing Xcode CoreSimulator components prevent the normal `xcodebui
 
 There is no background service or server. The built app runs without Xcode. The repository folder remains `tot-todo`.
 
+For agent development, use the separate [Chit Lab](./docs/CHIT_LAB.md) build with disposable synthetic data. Lab can run beside the personal app and keeps its build outputs, catalog, preferences, and file-state separate.
+
 To use `chit` from any repository, add the installed app's command directory to your shell's PATH. For a copy in `/Applications`, put this in `~/.zprofile`, then start a new terminal:
 
 ```sh
@@ -37,7 +39,7 @@ For a copy in `~/Applications`, use `$HOME/Applications/Chit.app/Contents/Resour
 ## Use the app
 
 - Type in **Add a task…** and press Return. Its circle toggles completion. Completed tasks move to the collapsible **Completed** section at the bottom.
-- Click a title to expand optional notes and subtasks inline. Notes are plain text with clickable links. Return commits titles; Shift-Return inserts a line break. Parent and child completion remain independent.
+- Click a task's title or row background to select it for editing. Subsequent single clicks toggle details immediately across the full row width; clicking blank list or header space collapses it and clears selection. The selected task always shows a disclosure control, which toggles details directly. Expanded rows show subtasks above notes. Native double-click and drag text selection remain available. Notes are plain text with clickable links. Return commits titles; Shift-Return inserts a line break. Parent and child completion remain independent.
 - **New List → In Chit** asks for a name and saves the list in app storage. **New List → Choose Folder…** opens a folder browser first, then a native save dialog for the filename, optional Finder tags, and destination. These are movable windows kept on screen, even when Chit sits at the screen edge. The chosen filename supplies the initial list name. Existing files are never silently replaced.
 - **Open List…** opens an existing YAML file in place. A small folder icon identifies lists saved in chosen folders. App-managed lists use plain tab labels.
 - Drag tabs to reorder them or place them in collapsible groups. Grouping changes the local organization, not the files' locations.
@@ -102,6 +104,7 @@ The native preview/smoke/file-panel modes require an explicit isolated `--store`
 
 ## Start here
 
+- [Documentation index](./docs/README.md) and [Chit Lab](./docs/CHIT_LAB.md): isolated agent development and validation.
 - [List-file cutover plan](./CUTOVER_PLAN.md): the list-file design, migration decisions, and implementation acceptance criteria.
 - [UI styling guide](./UI_STYLING_GUIDE.md): local copy of the parent-folder design guide.
 - [Research report](./RESEARCH.md): source availability, visual and interaction evidence, automation, existing projects, and the build-versus-adopt recommendation.

@@ -1,4 +1,5 @@
 import AppKit
+import TodoCore
 
 /// Explicit isolated-store regression check; never runs during ordinary app use.
 @MainActor
@@ -11,7 +12,7 @@ enum NativeFilePanelHarness {
         guard let parent = delegate.panel, let screen = parent.screen ?? NSScreen.main else {
             throw failure("No screen is available for the file-panel regression check.")
         }
-        let base = ProcessInfo.processInfo.environment["CHIT_FILE_STATE_DIRECTORY"]
+        let base = LabEnvironment.root ?? ProcessInfo.processInfo.environment["CHIT_FILE_STATE_DIRECTORY"]
             .map { URL(fileURLWithPath: $0).deletingLastPathComponent().appendingPathComponent("picker-folder", isDirectory: true) }
             ?? FileManager.default.temporaryDirectory
         let directory = base

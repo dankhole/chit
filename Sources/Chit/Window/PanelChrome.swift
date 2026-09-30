@@ -70,6 +70,7 @@ struct HeaderDragArea: NSViewRepresentable {
 /// Only blank header space moves the window. Interactive bounds are measured
 /// by SwiftUI, including controls whose rendering has no individual NSView.
 final class HeaderDragView: NSView {
+    static let blankClick = Notification.Name("Chit.blankHeaderClick")
     var excludedRects: [CGRect] = []
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

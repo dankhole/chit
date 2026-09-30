@@ -170,6 +170,7 @@ public final class ListFileStore: @unchecked Sendable {
         guard try FilePersistence.read(url) == expectedBytes else {
             throw StoreError.conflict("The original list changed during its move. Its newer contents were preserved.")
         }
+        try LabEnvironment.requireAllowed(url)
         guard unlink(url.path) == 0 else { throw FilePersistence.posixError("Removing original list file") }
         try FilePersistence.flushDirectory(url.deletingLastPathComponent())
     }
@@ -182,7 +183,9 @@ public final class ListFileStore: @unchecked Sendable {
     }
 
     private func locked<T>(_ body: () throws -> T) throws -> T {
-        try FilePersistence.withLock(at: lockURL, body)
+        try LabEnvironment.requireAllowed(url)
+        try LabEnvironment.requireAllowed(stateRoot)
+        return try FilePersistence.withLock(at: lockURL, body)
     }
 
     private func decode(_ bytes: Data) throws -> ListDocument {
@@ -235,8 +238,9 @@ public final class ListFileStore: @unchecked Sendable {
     }
 
     private func validBackups(in directory: URL) throws -> [BackupInfo] {
+        try LabEnvironment.requireAllowed(directory)
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
+        let files = try FilePersistence.contentsOfDirectory(at: directory)
         return files.compactMap { file in
             guard file.pathExtension == "yaml", let bytes = try? FilePersistence.read(file),
                   (try? decode(bytes)) != nil else { return nil }
@@ -252,7 +256,7 @@ public final class ListFileStore: @unchecked Sendable {
         try FilePersistence.makeDirectory(directory)
         try FilePersistence.atomicCreate(bytes, to: directory.appendingPathComponent(uniqueName(prefix: "before-save")))
         for old in try validBackups(in: directory).dropFirst(backupLimit) {
-            try FileManager.default.removeItem(at: old.url)
+            try FilePersistence.removeItem(at: old.url)
         }
     }
 
@@ -283,11 +287,15 @@ public final class ListFileStore: @unchecked Sendable {
 /// transaction locks and expected-content checks; a rename alone is not a CAS.
 enum FilePersistence {
     static var defaultStateDirectory: URL {
+        #if CHIT_LAB
+        return LabEnvironment.requiredRoot.appendingPathComponent("file-state", isDirectory: true)
+        #else
         if let path = ProcessInfo.processInfo.environment["CHIT_FILE_STATE_DIRECTORY"], !path.isEmpty {
             return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         }
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Chit/file-state", isDirectory: true)
+        #endif
     }
 
     static func canonicalURL(_ url: URL) -> URL { url.standardizedFileURL.resolvingSymlinksInPath() }
@@ -302,12 +310,15 @@ enum FilePersistence {
     }
 
     static func makeDirectory(_ directory: URL) throws {
+        try LabEnvironment.requireAllowed(directory)
         do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         catch { throw StoreError.io("Creating \(directory.path): \(error.localizedDescription)") }
     }
 
     static func withLock<T>(at lockURL: URL, _ body: () throws -> T) throws -> T {
+        try LabEnvironment.requireAllowed(lockURL)
         try makeDirectory(lockURL.deletingLastPathComponent())
+        try LabEnvironment.requireAllowed(lockURL)
         let descriptor = open(lockURL.path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else { throw posixError("Opening file lock") }
         defer { close(descriptor) }
@@ -326,6 +337,7 @@ enum FilePersistence {
     /// Open the path itself without following a newly substituted symbolic link.
     /// A descriptor provides a consistent snapshot across an editor's rename save.
     static func read(_ source: URL) throws -> Data {
+        try LabEnvironment.requireAllowed(source)
         let descriptor = open(source.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
         guard descriptor >= 0 else {
             if errno == ENOENT { throw StoreError.notFound("List file \(source.path). Locate the existing file before editing.") }
@@ -355,12 +367,17 @@ enum FilePersistence {
     }
 
     private static func write(_ bytes: Data, to destination: URL, exclusive: Bool, beforeCommit: () throws -> Void) throws {
+        try LabEnvironment.requireAllowed(destination)
         let parent = destination.deletingLastPathComponent()
         let temporary = parent.appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).tmp")
+        try LabEnvironment.requireAllowed(temporary)
         let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else { throw posixError("Creating temporary list file") }
         var openDescriptor = true
-        defer { if openDescriptor { close(descriptor) }; unlink(temporary.path) }
+        defer {
+            if openDescriptor { close(descriptor) }
+            if (try? LabEnvironment.requireAllowed(temporary)) != nil { unlink(temporary.path) }
+        }
         // Preserve ordinary file permissions when replacing an existing list.
         if !exclusive {
             var info = stat()
@@ -382,6 +399,8 @@ enum FilePersistence {
         openDescriptor = false
         guard closeResult == 0 else { throw posixError("Closing list file") }
         try beforeCommit()
+        try LabEnvironment.requireAllowed(temporary)
+        try LabEnvironment.requireAllowed(destination)
         if exclusive {
             // link publishes a complete inode and fails if *anything* occupies the path.
             guard link(temporary.path, destination.path) == 0 else {
@@ -395,10 +414,23 @@ enum FilePersistence {
     }
 
     static func flushDirectory(_ directory: URL) throws {
+        try LabEnvironment.requireAllowed(directory)
         let descriptor = open(directory.path, O_RDONLY | O_CLOEXEC)
         guard descriptor >= 0 else { throw posixError("Opening directory for flush; reread before retrying") }
         defer { close(descriptor) }
         guard fsync(descriptor) == 0 else { throw posixError("Flushing directory; reread before retrying") }
+    }
+
+    static func contentsOfDirectory(at directory: URL) throws -> [URL] {
+        try LabEnvironment.requireAllowed(directory)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        for file in files { try LabEnvironment.requireAllowed(file) }
+        return files
+    }
+
+    static func removeItem(at url: URL) throws {
+        try LabEnvironment.requireAllowed(url)
+        try FileManager.default.removeItem(at: url)
     }
 
     static func posixError(_ action: String) -> StoreError {

@@ -30,12 +30,16 @@ public final class TodoStore: @unchecked Sendable {
     var beforeCatalogRecoveryPublish: (() throws -> Void)?
 
     public static var defaultURL: URL {
+        #if CHIT_LAB
+        return LabEnvironment.requiredRoot.appendingPathComponent("workspace.json")
+        #else
         let environment = ProcessInfo.processInfo.environment
         for key in ["CHIT_STORE", "TOT_TODO_STORE"] {
             if let path = environment[key], !path.isEmpty { return URL(fileURLWithPath: (path as NSString).expandingTildeInPath) }
         }
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TotTodo", isDirectory: true).appendingPathComponent("workspace.json")
+        #endif
     }
 
     public init(url: URL = TodoStore.defaultURL, backupLimit: Int = 12, backupInterval: TimeInterval = 60, stateDirectory: URL? = nil) {
@@ -136,7 +140,8 @@ public final class TodoStore: @unchecked Sendable {
     }
 
     public func createList(name: String, at destination: URL? = nil, groupID: String? = nil) throws -> Project {
-        try locked {
+        if let destination { try LabEnvironment.requireAllowed(destination) }
+        return try locked {
             var catalog = try readOrMigrate()
             try requireGroup(groupID, in: catalog)
             let project = Project(name: name, groupID: groupID)
@@ -154,7 +159,8 @@ public final class TodoStore: @unchecked Sendable {
     }
 
     public func openList(at source: URL, groupID: String? = nil, normalizeMissingIDs: Bool = true) throws -> Project {
-        try locked {
+        try LabEnvironment.requireAllowed(source)
+        return try locked {
             var catalog = try readOrMigrate()
             let target = canonicalListURL(source)
             try requireYAMLPath(target)
@@ -222,6 +228,7 @@ public final class TodoStore: @unchecked Sendable {
                 }
                 let trashedURL: URL
                 do {
+                    try LabEnvironment.requireAllowed(expectedURL)
                     if let trashListFile { trashedURL = try trashListFile(expectedURL) }
                     else {
                         var result: NSURL?
@@ -247,6 +254,7 @@ public final class TodoStore: @unchecked Sendable {
     }
 
     public func relinkList(id: String, to source: URL) throws {
+        try LabEnvironment.requireAllowed(source)
         try locked {
             var catalog = try readOrMigrate()
             let existing = try linkedList(id, catalog)
@@ -265,6 +273,7 @@ public final class TodoStore: @unchecked Sendable {
     }
 
     public func moveList(id: String, to destination: URL) throws {
+        try LabEnvironment.requireAllowed(destination)
         try locked {
             var catalog = try readOrMigrate()
             try recoverMoves(&catalog)
@@ -481,6 +490,8 @@ public final class TodoStore: @unchecked Sendable {
     }
 
     private func locked<T>(_ body: () throws -> T) throws -> T {
+        try LabEnvironment.requireAllowed(url)
+        if let stateDirectory { try LabEnvironment.requireAllowed(stateDirectory) }
         try FilePersistence.makeDirectory(directory)
         // Retaining the old lock also cooperates with installed old binaries during staging.
         return try FilePersistence.withLock(at: URL(fileURLWithPath: url.path + ".lock"), body)
@@ -495,6 +506,7 @@ public final class TodoStore: @unchecked Sendable {
     private func managedURL(_ id: String) -> URL { managedDirectory.appendingPathComponent(id + ".yaml") }
     private func isManaged(_ location: URL) -> Bool { location.deletingLastPathComponent() == canonicalListURL(managedDirectory) }
     private func requireYAMLPath(_ source: URL) throws {
+        try LabEnvironment.requireAllowed(source)
         guard source.isFileURL, ["yaml", "yml"].contains(source.pathExtension.lowercased()) else { throw StoreError.invalid("Choose a .yaml or .yml list file.") }
     }
     private func requireGroup(_ id: String?, in catalog: ListCatalog) throws {
@@ -775,8 +787,9 @@ private extension TodoStore {
     }
 
     func recoverMoves(_ catalog: inout ListCatalog) throws {
+        try LabEnvironment.requireAllowed(moveDirectory)
         guard FileManager.default.fileExists(atPath: moveDirectory.path) else { return }
-        let operations = try FileManager.default.contentsOfDirectory(at: moveDirectory, includingPropertiesForKeys: [.isDirectoryKey]).sorted { $0.path < $1.path }
+        let operations = try FilePersistence.contentsOfDirectory(at: moveDirectory).sorted { $0.path < $1.path }
         for directory in operations {
             let recordURL = directory.appendingPathComponent("operation.json")
             guard let data = try existingRegularBytes(at: recordURL) else { continue }
@@ -787,6 +800,10 @@ private extension TodoStore {
             guard !["completed", "sourceRetained", "abandoned"].contains(record.phase) else { continue }
             guard let index = catalog.lists.firstIndex(where: { $0.id == record.listID }) else { continue }
             do {
+                // Validate the whole replay before touching any of its participating paths.
+                for path in [record.sourcePath, record.destinationPath, record.contentPath] {
+                    try LabEnvironment.requireAllowed(URL(fileURLWithPath: path))
+                }
                 let bytes = try FilePersistence.read(URL(fileURLWithPath: record.contentPath))
                 guard contentFingerprint(bytes) == record.fingerprint else { throw StoreError.corrupt("The move recovery copy changed") }
                 let source = canonicalListURL(URL(fileURLWithPath: record.sourcePath))

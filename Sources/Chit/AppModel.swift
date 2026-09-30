@@ -65,6 +65,7 @@ final class AppModel: ObservableObject {
     @Published var selectedProjectID = "" { didSet { persistPreferences() } }
     @Published var collapsedGroupIDs: Set<String> = [] { didSet { persistPreferences() } }
     @Published var expandedTaskIDs: [String: String] = [:] { didSet { persistPreferences() } }
+    @Published private(set) var selectedTaskIDs: [String: String] = [:]
     @Published private(set) var expandedCompletedProjectIDs: Set<String> = [] { didSet { persistPreferences() } }
     @Published var entryDrafts: [String: String] = [:] { didSet { persistPreferences() } }
     @Published var errorMessage: String?
@@ -145,6 +146,8 @@ final class AppModel: ObservableObject {
     }
 
     var expandedTaskID: String? { expandedTaskIDs[selectedProjectID] }
+    var selectedTaskID: String? { selectedTaskIDs[selectedProjectID] }
+    func selectedTaskID(projectID: String) -> String? { selectedTaskIDs[projectID] }
     var canUndo: Bool { undoManager.canUndo }
     var canRedo: Bool { undoManager.canRedo }
 
@@ -181,8 +184,8 @@ final class AppModel: ObservableObject {
             expandedCompletedProjectIDs.insert(projectID)
             return true
         }
-        if let taskID = expandedTaskIDs[projectID],
-           project.tasks.contains(where: { $0.id == taskID && $0.completed }) {
+        let editedIDs = [expandedTaskIDs[projectID], selectedTaskIDs[projectID]].compactMap { $0 }
+        if project.tasks.contains(where: { editedIDs.contains($0.id) && $0.completed }) {
             // Closing this section removes its editor. Native composition must
             // finish first, and a failed save must leave the draft accessible.
             if projectID == selectedProjectID,
@@ -191,8 +194,14 @@ final class AppModel: ObservableObject {
                 errorMessage = Self.completedCompositionMessage
                 return false
             }
-            guard flushPendingEdits() else { return false }
-            expandedTaskIDs.removeValue(forKey: projectID)
+            guard flushTaskInteractionEdits(projectID: projectID) else { return false }
+            if project.tasks.contains(where: { $0.id == expandedTaskIDs[projectID] && $0.completed }) {
+                expandedTaskIDs.removeValue(forKey: projectID)
+            }
+            if project.tasks.contains(where: { $0.id == selectedTaskIDs[projectID] && $0.completed }) {
+                selectedTaskIDs.removeValue(forKey: projectID)
+                if projectID == selectedProjectID { NSApp?.keyWindow?.makeFirstResponder(nil) }
+            }
         }
         expandedCompletedProjectIDs.remove(projectID)
         if errorMessage == Self.completedCompositionMessage { errorMessage = store.migrationWarning }
@@ -310,8 +319,41 @@ final class AppModel: ObservableObject {
         else { collapsedGroupIDs.insert(id) }
     }
 
-    func toggleDetails(taskID: String) {
-        _ = flushPendingEdits()
+    @discardableResult
+    func selectTaskForEditing(taskID: String, projectID: String) -> Bool {
+        guard projectID == selectedProjectID, taskWithID(taskID, projectID: projectID) != nil else { return false }
+        if selectedTaskIDs[projectID] == taskID { return true }
+        guard !hasActiveTextComposition, flushTaskInteractionEdits(projectID: projectID) else { return false }
+        if expandedTaskIDs[projectID] != taskID { expandedTaskIDs.removeValue(forKey: projectID) }
+        selectedTaskIDs[projectID] = taskID
+        return true
+    }
+
+    @discardableResult
+    func clickSelectedTaskTitle(taskID: String, projectID: String) -> Bool {
+        guard projectID == selectedProjectID, selectedTaskIDs[projectID] == taskID else { return false }
+        return toggleDetails(taskID: taskID)
+    }
+
+    @discardableResult
+    func clearTaskSelection() -> Bool {
+        guard !hasActiveTextComposition, flushTaskInteractionEdits(projectID: selectedProjectID) else { return false }
+        expandedTaskIDs.removeValue(forKey: selectedProjectID)
+        selectedTaskIDs.removeValue(forKey: selectedProjectID)
+        NSApp?.keyWindow?.makeFirstResponder(nil)
+        return true
+    }
+
+    @discardableResult
+    func toggleDetails(taskID: String) -> Bool {
+        guard taskWithID(taskID, projectID: selectedProjectID) != nil,
+              !hasActiveTextComposition else { return false }
+        if selectedTaskID == taskID && expandedTaskID == nil {
+            // Opening this editor's guidance does not hide any existing input.
+            // A blank or conflicting title must still have a way to recover.
+            _ = flushTaskInteractionEdits(projectID: selectedProjectID)
+        } else if !flushTaskInteractionEdits(projectID: selectedProjectID) { return false }
+        selectedTaskIDs[selectedProjectID] = taskID
         if expandedTaskID == taskID { expandedTaskIDs.removeValue(forKey: selectedProjectID) }
         else {
             if selectedProject?.tasks.contains(where: { $0.id == taskID && $0.completed }) == true {
@@ -319,6 +361,18 @@ final class AppModel: ObservableObject {
             }
             expandedTaskIDs[selectedProjectID] = taskID
         }
+        return true
+    }
+
+    private func flushTaskInteractionEdits(projectID: String) -> Bool {
+        // Navigation in one list must not be blocked by a retained draft in
+        // another list. Save the editors this interaction can actually hide.
+        for key in drafts.keys.sorted() {
+            guard let draft = drafts[key], (draft.projectID ?? self.projectID(for: draft.itemID)) == projectID else { continue }
+            if !flushDraft(key) { persistPreferences(); return false }
+        }
+        persistPreferences()
+        return true
     }
 
     func addTask(_ title: String) {
@@ -840,8 +894,8 @@ final class AppModel: ObservableObject {
         var visibleCompleted = preservingRecoveryPreferences
             ? expandedCompletedProjectIDs : expandedCompletedProjectIDs.intersection(projectIDs)
         for project in latest.projects {
-            if let taskID = expandedTaskIDs[project.id],
-               project.tasks.contains(where: { $0.id == taskID && $0.completed }) {
+            let editedIDs = [expandedTaskIDs[project.id], selectedTaskIDs[project.id]].compactMap { $0 }
+            if project.tasks.contains(where: { editedIDs.contains($0.id) && $0.completed }) {
                 visibleCompleted.insert(project.id)
             }
         }
@@ -858,6 +912,9 @@ final class AppModel: ObservableObject {
             let groupIDs = Set(workspace.groups.map(\.id))
             collapsedGroupIDs.formIntersection(groupIDs)
             expandedTaskIDs = expandedTaskIDs.filter { projectID, taskID in
+                workspace.projects.first(where: { $0.id == projectID })?.tasks.contains(where: { $0.id == taskID }) == true || listIssues[projectID] != nil
+            }
+            selectedTaskIDs = selectedTaskIDs.filter { projectID, taskID in
                 workspace.projects.first(where: { $0.id == projectID })?.tasks.contains(where: { $0.id == taskID }) == true || listIssues[projectID] != nil
             }
         }
@@ -1015,11 +1072,13 @@ private final class StorePathWatcher: @unchecked Sendable {
     private let queue = DispatchQueue(label: "Chit.store-observation")
 
     var matchesCurrentFile: Bool {
+        guard (try? LabEnvironment.requireAllowed(url)) != nil else { return false }
         var info = stat()
         return stat(url.path, &info) == 0 && info.st_dev == device && info.st_ino == inode
     }
 
     init?(url: URL, changed: @escaping @Sendable () -> Void) {
+        guard (try? LabEnvironment.requireAllowed(url)) != nil else { return nil }
         let descriptor = open(url.path, O_EVTONLY)
         guard descriptor >= 0 else { return nil }
         var info = stat()

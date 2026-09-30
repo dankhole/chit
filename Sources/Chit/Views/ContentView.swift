@@ -132,6 +132,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSText.didEndEditingNotification)) { _ in
             compositionInProgress = selectedEditorHasMarkedText
         }
+        .onReceive(NotificationCenter.default.publisher(for: HeaderDragView.blankClick)) { _ in
+            _ = model.clearTaskSelection()
+        }
         .sheet(isPresented: $newListPresented) {
             NewListForm(model: model, groupID: newListGroupID) { newListPresented = false }
         }
@@ -181,6 +184,7 @@ private struct ProjectTaskList: View {
     @ObservedObject var model: AppModel
     let project: Project
     @State private var topTaskID: String?
+    @State private var interactiveFrames: [CGRect] = []
 
     init(model: AppModel, project: Project) {
         self.model = model
@@ -189,28 +193,43 @@ private struct ProjectTaskList: View {
     }
 
     var body: some View {
+        let entries = model.taskListEntries(projectID: project.id)
+        let shadedIDs = alternatingBackgroundTaskIDs(in: entries)
         ScrollView {
             // Eager rows retain the one expanded native editor when completion
             // moves it below a long list, even if its new position is offscreen.
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(model.taskListEntries(projectID: project.id)) { item in
+                ForEach(entries) { item in
                     switch item {
                     case .task(let task):
                         TaskRow(model: model, task: task, projectID: project.id)
+                            .background(TaskInteractiveBounds())
+                            .background {
+                                if shadedIDs.contains(task.id) { TaskStripeBackground() }
+                            }
                             .id(item.id)
                     case .addTask:
                         addTaskEntry
+                            .background(TaskInteractiveBounds())
+                            .padding(.horizontal, 11)
                             .id(item.id)
                     case .completedHeader(_, let count):
                         completedHeader(count: count)
+                            .background(TaskInteractiveBounds())
+                            .padding(.horizontal, 11)
                             .id(item.id)
                     }
                 }
             }
             .scrollTargetLayout()
-            .padding(.horizontal, 11)
             .padding(.top, 7)
             .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .coordinateSpace(name: "task-list-interaction")
+        .onPreferenceChange(TaskInteractiveFrames.self) { interactiveFrames = $0 }
+        .background {
+            TaskBlankClickArea(excludedRects: interactiveFrames, onBlankClick: model.clearTaskSelection)
         }
         .scrollPosition(id: $topTaskID, anchor: .top)
         .disabled(!model.isSelectedListAvailable)
@@ -225,8 +244,8 @@ private struct ProjectTaskList: View {
         .onChange(of: topTaskID) { _, value in
             model.setScrollAnchor(projectID: project.id, taskID: value)
         }
-        .onChange(of: expandedTask?.completed) { old, new in
-            guard old != nil, new != nil, let task = expandedTask,
+        .onChange(of: editingTask?.completed) { old, new in
+            guard old != nil, new != nil, let task = editingTask,
                   let editor = NSApp.keyWindow?.firstResponder as? PlainTextView else { return }
             let identities = ["\(task.id):title", "\(task.id):notes", "add-child:\(task.id)"]
                 + task.subtasks.map { "\($0.id):title" }
@@ -234,8 +253,26 @@ private struct ProjectTaskList: View {
         }
     }
 
-    private var expandedTask: TaskItem? {
-        project.tasks.first { $0.id == model.expandedTaskID }
+    private var editingTask: TaskItem? {
+        let taskID = model.selectedTaskID(projectID: project.id) ?? model.expandedTaskIDs[project.id]
+        return project.tasks.first { $0.id == taskID }
+    }
+
+    private func alternatingBackgroundTaskIDs(in entries: [AppModel.TaskListEntry]) -> Set<String> {
+        var shadedIDs = Set<String>()
+        var taskIndex = 0
+        for entry in entries {
+            switch entry {
+            case .task(let task):
+                if taskIndex.isMultiple(of: 2) { shadedIDs.insert(task.id) }
+                taskIndex += 1
+            case .completedHeader:
+                taskIndex = 0
+            case .addTask:
+                break
+            }
+        }
+        return shadedIDs
     }
 
     private var entry: Binding<String> {
@@ -250,7 +287,6 @@ private struct ProjectTaskList: View {
                 model.addTask(entry.wrappedValue)
             })
         }
-        .padding(.top, 1)
         .disabled(!model.isSelectedListAvailable)
     }
 
@@ -276,36 +312,61 @@ private struct ProjectTaskList: View {
     }
 }
 
+private struct TaskInteractiveFrames: PreferenceKey {
+    static let defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) { value += nextValue() }
+}
+
+private struct TaskInteractiveBounds: View {
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: TaskInteractiveFrames.self,
+                                   value: [geometry.frame(in: .named("task-list-interaction"))])
+        }
+    }
+}
+
+private struct TaskBarControlFrames: PreferenceKey {
+    static let defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) { value += nextValue() }
+}
+
+private struct TaskBarControlBounds: View {
+    let taskID: String
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: TaskBarControlFrames.self,
+                                   value: [geometry.frame(in: .named(taskID))])
+        }
+    }
+}
+
 private struct TaskRow: View {
     @ObservedObject var model: AppModel
     let task: TaskItem
     let projectID: String
+    @State private var controlFrames: [CGRect] = []
     private var expanded: Bool { model.expandedTaskID == task.id }
+    private var selected: Bool { model.selectedTaskID(projectID: projectID) == task.id }
     private var title: String { model.text(itemID: task.id, field: .title, fallback: task.title, projectID: projectID) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 3) {
                 CompletionButton(completed: task.completed, title: title) { model.toggleTask(task, projectID: projectID) }
-                if expanded {
-                    NativeTextEditor(text: text(.title, task.title), identity: "\(task.id):title", completed: task.completed, submitOnReturn: true, onSubmit: commit, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
+                    .background(TaskBarControlBounds(taskID: task.id))
+                NativeTextEditor(text: text(.title, task.title), identity: "\(task.id):title",
+                    placeholder: expanded ? "" : "Untitled draft", completed: task.completed, submitOnReturn: true,
+                    compactTrailingNewlines: !expanded && !selected,
+                    onTitlePointerDown: selectTitle, onTitleSingleClick: {
+                        _ = model.clickSelectedTaskTitle(taskID: task.id, projectID: projectID)
+                    }, onTitleFocus: {
+                        model.selectTaskForEditing(taskID: task.id, projectID: projectID)
+                    }, onSubmit: commit, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
                         model.setText(itemID: task.id, field: .title, value: value, expectedBase: base, projectID: projectID)
                     })
-                } else {
-                    Button { model.toggleDetails(taskID: task.id) } label: {
-                        Text(title.isEmpty ? "Untitled draft" : title)
-                            .font(.system(size: 14))
-                            .foregroundStyle(task.completed ? Mocha.secondary : Mocha.text)
-                            .strikethrough(task.completed)
-                            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Edit \(title)")
-                }
-                if expanded || !task.notes.isEmpty || !task.subtasks.isEmpty {
-                    Button { model.toggleDetails(taskID: task.id) } label: {
+                if selected || expanded || !task.notes.isEmpty || !task.subtasks.isEmpty {
+                    Button(action: toggleDetails) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Mocha.secondary)
@@ -314,6 +375,8 @@ private struct TaskRow: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(expanded ? "Close task details" : "Open task details")
+                    .accessibilityIdentifier("task-details:\(task.id)")
+                    .background(TaskBarControlBounds(taskID: task.id))
                 }
             }
             .frame(minHeight: 30, alignment: .top)
@@ -324,23 +387,21 @@ private struct TaskRow: View {
                             .font(.system(size: 11)).foregroundStyle(Mocha.blue)
                     }
                     ConflictChoices(model: model, itemID: task.id, projectID: projectID)
-                    NativeTextEditor(text: text(.notes, task.notes), identity: "\(task.id):notes", placeholder: "Add notes or a link…", fontSize: 13, secondary: true, links: true, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
-                        model.setText(itemID: task.id, field: .notes, value: value, expectedBase: base, projectID: projectID)
-                    })
-                        .padding(.bottom, task.subtasks.isEmpty ? 0 : 3)
+                        .background(TaskBarControlBounds(taskID: task.id))
                     ForEach(task.subtasks) { subtask in
                         SubtaskRow(model: model, subtask: subtask, projectID: projectID)
+                            .background(TaskBarControlBounds(taskID: task.id))
                     }
                     HStack(alignment: .top, spacing: 3) {
                         Image(systemName: "plus").font(.system(size: 13))
-                            .foregroundStyle(Mocha.secondary).frame(width: 22, height: 26)
+                            .foregroundStyle(Mocha.secondary).frame(width: 22, height: Mocha.textRowHeight)
                         NativeTextEditor(text: subtaskEntry, identity: "add-child:\(task.id)", placeholder: "Add subtask…", fontSize: 13, secondary: true, submitOnReturn: true, onSubmit: {
                             let value = subtaskEntry.wrappedValue
                             guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                             model.addSubtask(parentID: task.id, title: value, projectID: projectID)
                         })
                         Menu {
-                            Button("Close details") { model.toggleDetails(taskID: task.id) }
+                            Button("Close details", action: toggleDetails)
                             if !task.subtasks.isEmpty {
                                 Menu("Delete subtask") {
                                     ForEach(task.subtasks) { subtask in
@@ -350,19 +411,38 @@ private struct TaskRow: View {
                             }
                             Button("Delete task", role: .destructive) { model.deleteTask(task, projectID: projectID) }
                         } label: {
-                            Image(systemName: "ellipsis").frame(width: 20, height: 26)
+                            Image(systemName: "ellipsis").frame(width: 20, height: Mocha.textRowHeight)
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .accessibilityLabel("Task actions")
                     }
+                    .background(TaskBarControlBounds(taskID: task.id))
+                    NativeTextEditor(text: text(.notes, task.notes), identity: "\(task.id):notes", placeholder: "Add notes or a link…", fontSize: 13, secondary: true, links: true, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
+                        model.setText(itemID: task.id, field: .notes, value: value, expectedBase: base, projectID: projectID)
+                    })
+                    .padding(.top, 3)
                 }
                 .padding(.leading, 25)
                 .padding(.bottom, 5)
             }
         }
+        .padding(.horizontal, 11)
+        .coordinateSpace(name: task.id)
+        .onPreferenceChange(TaskBarControlFrames.self) { controlFrames = $0 }
+        .background {
+            TaskBarClickArea(taskID: task.id, excludedRects: controlFrames, onPointerDown: {
+                let disposition = selectTitle()
+                if disposition == .editOnly { ListActions.focusEditor(identity: "\(task.id):title") }
+                return disposition
+            }, onSingleClick: {
+                if model.clickSelectedTaskTitle(taskID: task.id, projectID: projectID) {
+                    ListActions.focusEditor(identity: "\(task.id):title")
+                }
+            })
+        }
         .contextMenu {
             Button(task.completed ? "Mark incomplete" : "Mark complete") { model.toggleTask(task, projectID: projectID) }
-            Button(expanded ? "Close details" : "Edit task") { model.toggleDetails(taskID: task.id) }
+            Button(expanded ? "Close details" : "Edit task", action: toggleDetails)
             Divider()
             Button("Delete task", role: .destructive) { model.deleteTask(task, projectID: projectID) }
         }
@@ -376,6 +456,15 @@ private struct TaskRow: View {
     }
     private func commit() {
         if model.flushPendingEdits() { NSApp.keyWindow?.makeFirstResponder(nil) }
+    }
+    private func selectTitle() -> TitleClickDisposition {
+        let wasSelected = selected
+        guard model.selectTaskForEditing(taskID: task.id, projectID: projectID) else { return .reject }
+        return wasSelected ? .toggleDetails : .editOnly
+    }
+    private func toggleDetails() {
+        guard model.toggleDetails(taskID: task.id) else { return }
+        DispatchQueue.main.async { ListActions.focusEditor(identity: "\(task.id):title") }
     }
 }
 

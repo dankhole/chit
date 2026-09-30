@@ -1,5 +1,6 @@
 import AppKit
 import ScreenCaptureKit
+import TodoCore
 
 /// Explicit --snapshot-backdrop mode only. Uses an app-owned backdrop and the
 /// current-process capture API, never requesting access to another app or desktop.
@@ -58,6 +59,7 @@ enum NativePreview {
             throw error("The preview image could not be encoded.")
         }
         let url = URL(fileURLWithPath: path)
+        try LabEnvironment.requireAllowed(url)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
         print("Captured only this app's panel and test backdrop: \(image.width)×\(image.height).")

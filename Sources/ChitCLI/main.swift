@@ -2,10 +2,23 @@ import Foundation
 import TodoCore
 import Darwin
 
-private let usage = """
-chit — local task access (JSON output)
+#if CHIT_LAB
+private let storageUsage = """
+Chit Lab requires --lab-root ROOT with a marked session directory.
+--store defaults to ROOT/workspace.json; file state stays in ROOT/file-state.
+All file paths, including text and patch inputs, must stay within ROOT.
+"""
+#else
+private let storageUsage = """
+--store defaults to CHIT_STORE, then legacy TOT_TODO_STORE, then
+Application Support/TotTodo/workspace.json (legacy catalog/migration anchor).
+"""
+#endif
 
-Usage: chit [--store PATH] [--file PATH] COMMAND [OPTIONS]
+private let usage = """
+\(LabEnvironment.isEnabled ? "Chit Lab" : "chit") — local task access (JSON output)
+
+Usage: chit \(LabEnvironment.isEnabled ? "--lab-root ROOT " : "")[--store PATH] [--file PATH] COMMAND [OPTIONS]
 
   lists                                 List linked lists (without tasks)
   groups                                List local groups
@@ -36,8 +49,7 @@ Only one input may read stdin. Files/stdin must be UTF-8; trailing newlines
 are preserved. IDs are stable. List names must resolve unambiguously.
 Reads preserve file bytes and report missing IDs as null. Mutations normalize
 missing IDs in the same guarded write. Use normalize before selecting new items.
---store defaults to CHIT_STORE, then legacy TOT_TODO_STORE, then
-Application Support/TotTodo/workspace.json (legacy catalog/migration anchor).
+\(storageUsage)
 todo remains a compatibility alias for chit.
 Success JSON goes to stdout; error JSON goes to stderr with a nonzero exit.
 --help prints this help. See CLI.md for examples and concurrency semantics.
@@ -116,7 +128,11 @@ private struct Arguments {
 private func readUTF8(path: String?) throws -> String {
     let data: Data
     do {
-        if let path { data = try Data(contentsOf: URL(fileURLWithPath: path)) }
+        if let path {
+            let source = URL(fileURLWithPath: path)
+            try LabEnvironment.requireAllowed(source)
+            data = try Data(contentsOf: source)
+        }
         else { data = try FileHandle.standardInput.readToEnd() ?? Data() }
     } catch { throw CLIError("Could not read \(path ?? "stdin"): \(error.localizedDescription)", code: "input") }
     guard let text = String(data: data, encoding: .utf8) else { throw CLIError("\(path ?? "stdin") is not valid UTF-8.", code: "input") }
@@ -221,7 +237,8 @@ private func documentValue(_ document: ListDocument, project: Project? = nil) th
 }
 
 private func run() throws {
-    let args = try Arguments(Array(CommandLine.arguments.dropFirst()))
+    let arguments = try LabEnvironment.configure(arguments: Array(CommandLine.arguments.dropFirst()))
+    let args = try Arguments(arguments)
     if args.flags.contains("help") {
         try FileHandle.standardOutput.write(contentsOf: Data((usage + "\n").utf8))
         return
@@ -241,6 +258,8 @@ private func run() throws {
     default: throw CLIError("Unknown command '\(command)'. Use --help.")
     }
     try args.validate(allowed: allowed)
+    if let path = args.options["store"] { try LabEnvironment.requireAllowed(fileURL(path)) }
+    if let path = args.options["file"] { try LabEnvironment.requireAllowed(fileURL(path)) }
     let file = args.options["file"].map { ListFileStore(url: fileURL($0)) }
     if ["init", "open"].contains(command), file == nil { throw CLIError("\(command) requires --file PATH.") }
     if file != nil, ["lists", "projects", "groups"].contains(command) { throw CLIError("\(command) uses the local catalog; omit --file.") }

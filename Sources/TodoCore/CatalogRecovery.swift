@@ -59,6 +59,7 @@ struct CatalogRecoveryFileSnapshot: Equatable, Sendable {
     let changedNanoseconds: Int64
 
     static func read(at url: URL) throws -> Self? {
+        try LabEnvironment.requireAllowed(url)
         var before = stat()
         guard lstat(url.path, &before) == 0 else {
             if errno == ENOENT { return nil }
@@ -68,6 +69,7 @@ struct CatalogRecoveryFileSnapshot: Equatable, Sendable {
             throw StoreError.io("\(url.path) must be a regular file, not a directory or symbolic link.")
         }
         let bytes = try FilePersistence.read(url)
+        try LabEnvironment.requireAllowed(url)
         var after = stat()
         guard lstat(url.path, &after) == 0, sameIdentity(before, after) else {
             throw StoreError.conflict("\(url.path) changed while preparing recovery. Refresh the preview.")
@@ -127,6 +129,7 @@ func requireRecoverableCatalog(_ snapshot: CatalogRecoveryFileSnapshot?) throws 
 }
 
 func catalogRecoveryYAMLFiles(in directory: URL) throws -> [URL] {
+    try LabEnvironment.requireAllowed(directory)
     var info = stat()
     guard lstat(directory.path, &info) == 0 else {
         if errno == ENOENT { return [] }
@@ -136,7 +139,7 @@ func catalogRecoveryYAMLFiles(in directory: URL) throws -> [URL] {
         throw StoreError.io("The managed lists directory must be a directory, without symbolic links: \(directory.path)")
     }
     do {
-        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        return try FilePersistence.contentsOfDirectory(at: directory)
             .filter { ["yaml", "yml"].contains($0.pathExtension.lowercased()) }
     } catch {
         throw StoreError.io("The managed lists directory could not be read. Restore access and refresh the preview: \(directory.path). \(error.localizedDescription)")

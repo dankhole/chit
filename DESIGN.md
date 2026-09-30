@@ -9,9 +9,9 @@ Updated 30 September 2026 for the list-file cutover. This brief defines the inte
 - Dark mode only, using Catppuccin Mocha and a softly blurred background. Keep text and controls fully opaque.
 - A softly fading outer edge, without a hard window outline or native shadow. The background should visibly reveal blurred content behind it, with adjustable opacity.
 - A small icon in the top macOS menu bar shows and hides the window. Do not show a Dock icon.
-- A compact, continuous list surface. Most rows are only a completion circle and task title.
+- A compact, continuous list surface with subtle alternating task backgrounds. Most rows are only a completion circle and task title.
 - Named tabs for roughly 6–10 lists, organized into one level of collapsible groups.
-- Clicking a task opens optional details inline: an editable title, freeform notes with links, and one level of subtasks.
+- The first click on a task edits its title; subsequent single clicks toggle inline details immediately across the full row width: one level of subtasks, followed by freeform notes with links. Blank-space clicks collapse details and clear row selection.
 - A simple local command lets agents read, add, edit, complete, and reopen tasks. UI and command use the same store.
 - Keep the interface simple. Additional task fields, dashboards, activity feeds, and permanent sync indicators are unnecessary.
 
@@ -21,7 +21,9 @@ The selected visual source is [the Mocha mockup](./outputs/design-discussion/moc
 
 Use one borderless, resizable floating panel with a centered hide button beside the list tabs in one compact header. Right-click the menu-bar icon and choose Settings to open a small popover with a live background-opacity slider from 30–100%, initially 80%; remember the choice locally. Keep settings out of the task header. Empty header space moves the panel; its perimeter resizes it. Task rows and the add-task entry sit directly below the header. Start around 424 by 350 macOS points. Preserve user resizing and scroll longer lists rather than resizing the window on every task change.
 
-Start with system type at 14 points for tasks, 13 for details and subtasks, and 12 for navigation. Use roughly 12-point side insets and 30-point rows for single-line tasks. Wrapped titles grow naturally and align with the title above, not the checkbox gutter. Small visible controls keep larger hit areas. Avoid cards, extra row dividers, duplicate list headings, and large empty footers. A disclosure indicator is useful for tasks that already contain details or subtasks; all titles remain clickable to add details.
+Start with system type at 14 points for tasks, 13 for details and subtasks, and 12 for navigation. Use roughly 12-point side insets and 30-point rows for single-line tasks. Wrapped titles grow naturally and align with the title above, not the checkbox gutter. Small visible controls keep larger hit areas. Avoid cards, extra row dividers, duplicate list headings, and large empty footers. Show a disclosure indicator whenever a task is selected, expanded, or contains details or subtasks.
+
+Alternate a subtle background tint between task rows to make the list easier to scan. Extend the tint across the full window width and softly fade its top and bottom edges; retain the foreground's horizontal insets and full opacity. Keep expanded notes and subtasks on their parent's background, and leave the add-task entry neutral. The add-task entry follows the list's normal row rhythm without an extra empty-row gap. Collapsed titles omit terminal newline characters from display; saved text and internal line breaks remain intact, and the editor retains the original text.
 
 Use these [official Mocha palette](https://catppuccin.com/palette/) values as the starting tokens:
 
@@ -62,7 +64,10 @@ The strip wraps rather than shrinking labels to fit. Review 6–10 mixed lists, 
 | --- | --- |
 | Add task | Type a title and press Return. Save it and keep the add entry ready. Ignore empty or whitespace-only additions. |
 | Click completion circle | Toggle only that task's completion. Completed top-level tasks move to a collapsible Completed section at the bottom; reopening returns them to the active list. |
-| Click title | Expand the task inline. The title becomes editable, followed by optional notes and subtasks. Only one task is expanded per list initially. |
+| First click on a task row/title | Select the task and focus its title for native text editing, without opening its details. |
+| Click the selected row/title again | Toggle details immediately on each subsequent single click, including the full-width row background. Keep the title editable in either state. Preserve native double-click selection and drag selection; a double-click's first click may toggle details, and its second click selects text without another toggle. |
+| Click disclosure | Toggle details directly. Only one task is expanded per list. |
+| Click blank space | Collapse the current task and clear row selection, preserving edits. The next row click starts with title editing again. Blank header space still supports dragging the window. |
 | Close details | Preserve edits and collapse the extra content. |
 | Edit title | Use native selection, clipboard, and Undo. Return commits; Shift-Return inserts a line break. Pasted line breaks stay in one task. |
 | Edit notes | Plain multiline text, without a formatting toolbar. Return inserts a line break. Keep URLs literal and offer the native open-link action. |
@@ -72,7 +77,7 @@ The strip wraps rather than shrinking labels to fit. Review 6–10 mixed lists, 
 | Clear an existing title | Keep it as an unsaved draft and require a title or an explicit delete; do not silently delete the task or its notes. |
 | Select another list | Preserve editing context and drafts without a save dialog. |
 
-Subtasks initially need only title and completion. Native input-method composition takes precedence over Return and Escape shortcuts. URLs must not be transformed into rich-text or Markdown storage. Verify link opening without disrupting ordinary editing; use a small native text-view bridge only where SwiftUI does not provide the required behavior.
+Subtasks initially need only title and completion. Show subtasks and their add entry above the notes editor. Native input-method composition takes precedence over Return and Escape shortcuts and any collapse that would remove the active editor. A failed save keeps the editor accessible. Completion controls, notes, subtasks, and menus keep their own actions instead of toggling the parent row. URLs must not be transformed into rich-text or Markdown storage. Verify link opening without disrupting ordinary editing; use a small native text-view bridge only where SwiftUI does not provide the required behavior.
 
 The Completed section starts closed and remembers its state per list in local preferences. Keep a task visible when it is completed during an active edit, including completion from the CLI, so its editor and draft remain available. Subtask completion stays within its parent.
 
