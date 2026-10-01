@@ -12,42 +12,41 @@ disabled for isolated harnesses and storage overrides (`CHIT_STORE`,
 
 ## Public download location
 
-The source repository, `dankhole/chit`, is currently private, and no public
-destination has been selected. The release workflow supports two modes:
-
-- **Public source and distribution:** publish releases and the Homebrew cask in
-  `dankhole/chit`. Leave `DISTRIBUTION_REPOSITORY` unset, or set it to that name.
-- **Private source, public distribution:** create a public repository such as
-  `dankhole/chit-releases`, initialize its default branch, and set the source
-  repository's `DISTRIBUTION_REPOSITORY` variable to that name. Release assets
-  and cask PRs go there; the source stays private.
-
-Choose the destination explicitly before first publication. No workflow changes
-repository visibility. The destination must be public because installed apps
-and Homebrew download without GitHub credentials; GitHub only provides
+The public source, release, and Homebrew tap repository is
+[`dankhole/chit`](https://github.com/dankhole/chit).
+`DISTRIBUTION_REPOSITORY` is configured as `dankhole/chit`.
+No workflow changes repository visibility. The destination must be public because
+installed apps and Homebrew download without GitHub credentials; GitHub only provides
 unauthenticated API access to public resources.
 [GitHub release API](https://docs.github.com/en/rest/releases/releases).
 
 The stable feed is
-`https://github.com/OWNER/REPOSITORY/releases/latest/download/appcast.xml`, using
-the chosen distribution repository. For same-repository distribution it is
 `https://github.com/dankhole/chit/releases/latest/download/appcast.xml`.
 Keep that location and signing keys stable after shipping an app.
 
 ## One-time setup
 
-Use an Apple Developer ID Application certificate and its private key, plus an
-App Store Connect API key authorized for notarization. Export the certificate
-and private key together as a password-protected `.p12`. Preserve the original
-key material outside the repository and CI. Apple's
+Signed releases await Apple Developer Program enrollment and Apple signing/
+notarization credentials. Complete these steps before pushing a release tag:
+
+1. [Enroll in the Apple Developer Program](https://developer.apple.com/programs/enroll/).
+2. [Create a Developer ID Application certificate](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)
+   and export it with its private key as a password-protected `.p12`.
+3. [Create a team App Store Connect API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api)
+   for notarization, retaining its `.p8`, key ID, and issuer ID. This workflow uses
+   the issuer-based [notarytool API-key credentials](https://developer.apple.com/documentation/technotes/tn3147-migrating-to-the-latest-notarization-tool).
+
+Preserve the original signing key material outside the repository and CI. Apple's
 [notarization guide](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
 explains account requirements and API-key authentication.
 
-From the pinned Sparkle distribution, generate the app's EdDSA key once with
-`bin/generate_keys --account local.dcole.Chit.updates`. It stores the private key
-in your login Keychain and prints the public key used as `SUPublicEDKey`.
-Use that same app-specific account when exporting for CI or importing on another
-Mac, keeping an encrypted backup of the export:
+Chit's persistent EdDSA key is already stored in the login Keychain under
+`local.dcole.Chit.updates`, with its matching `SPARKLE_PRIVATE_KEY` secret and
+`SPARKLE_PUBLIC_KEY` variable configured in GitHub Actions. From the pinned
+Sparkle distribution, `bin/generate_keys --account local.dcole.Chit.updates`
+reuses that key and displays its public key; do not replace it for a new release.
+Use that same account to export a backup or restore it on another Mac.
+Encrypt the exported backup before storing it:
 
 ```sh
 bin/generate_keys --account local.dcole.Chit.updates -x /private/path/sparkle.key
@@ -73,13 +72,13 @@ never in source control, issue text, or chat.
 | `APPLE_NOTARY_KEY_ID` | Notarization API key ID |
 | `APPLE_NOTARY_ISSUER_ID` | Notarization API issuer ID |
 | `SPARKLE_PRIVATE_KEY` | Base64 private key from `generate_keys -x` (32-byte current seed or 64/96-byte legacy export), matching `SPARKLE_PUBLIC_KEY` |
-| `DISTRIBUTION_TOKEN` | Required for a separate distribution repository; fine-grained token scoped to that repository with Contents and Pull requests write permissions |
+| `DISTRIBUTION_TOKEN` | Not needed for `dankhole/chit`; only needed for an alternate repository, scoped there with Contents and Pull requests write permissions |
 
 | Repository variable | Value |
 | --- | --- |
 | `SPARKLE_PUBLIC_KEY` | Matching base64 public EdDSA key |
 | `APPLE_TEAM_ID` | Developer team ID matching the certificate |
-| `DISTRIBUTION_REPOSITORY` | Public `OWNER/REPOSITORY`; defaults to the source repository |
+| `DISTRIBUTION_REPOSITORY` | `dankhole/chit`, or unset to use the source repository |
 
 For example, encode the `.p12` into a protected file, then upload files with the
 GitHub CLI. These commands do not print their contents:
@@ -96,10 +95,10 @@ Use the same file-input approach for the remaining secrets. Set variables in
 GitHub settings or with `gh variable set`. See
 [GitHub's secrets guide](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
 
-Enable GitHub Actions in the source repository. For same-repository cask PRs,
-enable **Allow GitHub Actions to create and approve pull requests** in Settings
-→ Actions → General → Workflow permissions. Separate-repository publication uses `DISTRIBUTION_TOKEN`; initialize
-that repository's default branch before creating its first cask PR.
+GitHub Actions is configured to **Allow GitHub Actions to create and approve pull
+requests** in Settings → Actions → General → Workflow permissions. The default
+token permission remains read-only; publication and cask jobs request their
+specific write permissions and use `GITHUB_TOKEN` for this destination.
 [GitHub Actions settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository).
 
 ## Validate and publish
@@ -117,7 +116,7 @@ scripts/release-build.sh --version X.Y.Z \
   --public-ed-key BASE64_PUBLIC_KEY --ad-hoc
 ```
 
-Replace `X.Y.Z`, the key, and the destination URL before running. The builder
+Replace `X.Y.Z` and the key before running. The builder
 requires a real HTTPS appcast URL and a nonzero 32-byte base64 public key; it
 rejects placeholder domains. Ad-hoc output is for validation and cannot be
 published. For a signed local build, replace
@@ -161,17 +160,10 @@ ZIP. The first install cannot work until that PR is merged, and upgrades follow
 the cask version on the default branch. Do not insert a placeholder checksum or
 hand-edit it independently of the published archive.
 
-For public same-repository distribution:
+After the first signed release and its cask PR are ready:
 
 ```sh
 brew tap dankhole/chit https://github.com/dankhole/chit.git
-brew install --cask dankhole/chit/chit
-```
-
-For a separate public `dankhole/chit-releases` destination:
-
-```sh
-brew tap dankhole/chit https://github.com/dankhole/chit-releases.git
 brew install --cask dankhole/chit/chit
 ```
 
@@ -184,8 +176,6 @@ brew outdated --cask --greedy dankhole/chit/chit
 brew upgrade --cask --greedy dankhole/chit/chit
 ```
 
-Use only the tap URL for your chosen destination. If an existing `dankhole/chit`
-tap points elsewhere, untap it before tapping the chosen URL.
 [Homebrew manual](https://docs.brew.sh/Manpage).
 
 ## Failed or incorrect releases

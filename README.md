@@ -9,25 +9,27 @@ The list-file cutover is implemented. Existing app lists migrate to YAML on firs
 Release builds target macOS 14 or later on Apple Silicon and Intel Macs. They
 include the CLI and in-app updates through Sparkle. Installation requires a
 published signed release; Homebrew also requires its generated cask to be merged.
-See [release setup and download location](./docs/RELEASING.md) before using these
-commands. Local builds remain available below.
+Signed releases await Apple Developer Program enrollment, a Developer ID
+Application certificate, and notarization credentials. See
+[release setup](./docs/RELEASING.md#one-time-setup) for the remaining steps.
+Local builds remain available below.
 
-Download `Chit-X.Y.Z.zip` from the configured public release repository, unzip it,
+Once published, download `Chit-X.Y.Z.zip` from
+[GitHub Releases](https://github.com/dankhole/chit/releases), unzip it,
 move `Chit.app` into `/Applications` or `~/Applications`, and open that copy. Use
 only one Chit copy at a time. Replace an existing local build with the first
 signed release once; local builds do not include the updater. In a release
 build, right-click the menu-bar icon
 and choose **Check for Updates…** to check for a newer signed release.
 
-The source repository can also act as a Homebrew tap when it is public:
+The chosen Homebrew tap is the same `dankhole/chit` repository. After the first
+release and cask PR are ready:
 
 ```sh
 brew tap dankhole/chit https://github.com/dankhole/chit.git
 brew install --cask dankhole/chit/chit
 ```
 
-For a separate public distribution repository, keep the `dankhole/chit` tap name
-and change its URL as described in [the release guide](./docs/RELEASING.md#homebrew).
 The cask marks Chit as updating itself, so ordinary `brew outdated` skips it. To choose
 Homebrew-managed upgrades, quit Chit and run `brew update`, then
 `brew upgrade --cask --greedy dankhole/chit/chit`.
