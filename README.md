@@ -2,7 +2,7 @@
 
 A small native Mac task app with a dark Mocha window, background blur, list tabs, collapsible groups, optional notes, and one level of subtasks. Each list lives in a readable YAML file. The app, local CLI, and a text editor work on that same file.
 
-The list-file cutover is implemented. Existing app lists migrate to YAML on first launch, retaining the original workspace for recovery. See [list-file storage and migration](./docs/CUTOVER_PLAN.md) for the scope and completion evidence.
+The list-file cutover is implemented. Existing app lists migrate to YAML on first launch, retaining the original workspace for recovery. See [storage, migration, and recovery](./docs/STORAGE.md) for current contracts and the [completed cutover plan](./docs/CUTOVER_PLAN.md) for historical scope and evidence.
 
 ## Build and open
 
@@ -83,6 +83,8 @@ The app observes external saves, including editors that replace files atomically
 
 ## Existing data and recovery
 
+See [storage, migration, and recovery](./docs/STORAGE.md) for the full current contract.
+
 The default legacy anchor remains `~/Library/Application Support/TotTodo/workspace.json`, preserving existing preference keys. On first cutover, Chit stages one YAML file per old project, preserves its IDs and content, and publishes `workspace.catalog.json` last. Managed files live in `workspace.lists/`. The catalog contains list locations and organization; it is not a second editable copy of your tasks. The original JSON remains a recovery source and is no longer written by the new app/CLI.
 
 Keep old app and command copies closed after migration; they cannot understand the new catalog. Existing repo `todo.md` files are never automatically deleted or converted. Use **Move File…** to move a migrated list into its repository when ready.
@@ -114,5 +116,6 @@ Use [Chit Lab](./docs/CHIT_LAB.md) for isolated agent builds, snapshots, and nat
 - [Agent guide](./docs/AGENT_GUIDE.md): task writing, todo conversion, and reusable agent instructions.
 - [CLI reference](./docs/CLI.md): commands, literal text input, and concurrency semantics.
 - [Product design](./docs/DESIGN.md) and [UI styling](./docs/UI_STYLING_GUIDE.md): interface and behavior guidance.
-- [List-file storage and migration](./docs/CUTOVER_PLAN.md): accepted contracts and completed cutover plan.
+- [Storage, migration, and recovery](./docs/STORAGE.md): current list-file contracts and failure handling.
+- [Completed cutover plan](./docs/CUTOVER_PLAN.md): tracked historical scope and completion evidence.
 - [Historical material](./docs/README.md#historical-material): local archives and recovery from Git history.

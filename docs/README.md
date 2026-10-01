@@ -5,7 +5,8 @@
 - [Agent guide](AGENT_GUIDE.md): task writing, converting existing todos, and copyable `AGENTS.md` instructions.
 - [CLI](CLI.md): shared list operations for agents.
 - [Product design](DESIGN.md): current interface and behavior.
-- [List-file storage](CUTOVER_PLAN.md): accepted storage contracts, migration, and recovery, retained in the completed cutover plan.
+- [Storage, migration, and recovery](STORAGE.md): current list-file contracts and failure handling.
+- [Completed cutover plan](CUTOVER_PLAN.md): tracked historical scope, implementation sequence, and completion evidence.
 - [UI styling](UI_STYLING_GUIDE.md): design guidance.
 - [Historical material](#historical-material): local archives and recovery from Git history.
 
@@ -24,8 +25,10 @@ Run commands in these guides from the repository root unless stated otherwise.
 | `outputs/` | Ignored local captures, experiments, and downloaded reference caches |
 
 Keep new development guides here and link them from this index. Put transient
-captures in a Lab session or `outputs/`. Keep retired documents and captures in
-the ignored archive. Do not commit downloaded source trees as application code.
+captures in a Lab session or `outputs/`. Keep retired research and captures in
+the ignored archive. The completed [cutover plan](CUTOVER_PLAN.md) remains tracked
+because its migration decisions and completion evidence are useful history.
+Do not commit downloaded source trees as application code.
 
 `todo.yaml` is an existing Chit task list, not a generated documentation file.
 Keep its path and IDs stable because it may be linked from the app.

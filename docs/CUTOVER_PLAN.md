@@ -1,6 +1,6 @@
 # Chit: list files and storage cutover
 
-Status: implemented and reviewed, 30 September 2026. This completed plan retains the accepted storage contracts, migration decisions, and historical completion evidence. For current development and validation, use [Chit Lab](./CHIT_LAB.md). The repository folder remains `tot-todo`.
+Status: implemented and reviewed, 30 September 2026. This tracked historical plan retains the cutover scope, implementation sequence, and completion evidence. Its UI proposals describe that cutover; current behavior is in [DESIGN.md](DESIGN.md), and current storage, migration, and recovery contracts are in [STORAGE.md](STORAGE.md). For development and validation, use [Chit Lab](CHIT_LAB.md). The repository folder remains `tot-todo`.
 
 ## Product direction
 
@@ -41,69 +41,14 @@ Groups and tab ordering never move files. A missing file gets a concise Locate a
 
 The no-backup catalog recovery path rebuilds only the local list index. Review discovered managed files and recoverable known paths, choose additional files when necessary, and explicitly select the lists to reconnect. Preserve the old index before atomic replacement and leave all YAML, legacy content, and retained drafts intact. Report malformed or conflicting files. An explicit empty rebuild restores the New/Open flow without deleting anything. A missing committed index must not restart migration from stale legacy task data.
 
-## Portable file contract
+## Storage decisions retained from the cutover
 
-Use one YAML document per list with a small versioned schema. Suggested filename: `todo.yaml`; other `.yaml` and `.yml` names are valid. A filename is not an identity. The document holds its own stable ID and name, tasks, completion, optional notes, and optional subtasks. Keep local groups, tab order, window preferences, and drafts out of it.
-
-The canonical writer always emits a short agent-facing comment header. `PATH` means the actual list filename:
-
-```yaml
-# Chit task list. This file is the source of truth for this list.
-# Agents: prefer the Chit CLI to preserve IDs and check concurrent edits.
-# Read: chit --file PATH read    Help: chit --help
-# Manual edits are supported. Keep existing IDs; new tasks need only a title.
-version: 1
-id: 0F0EA62E-1504-4E71-AD97-41840AB1214F
-name: Website
-tasks:
-  - title: Fix the settings layout
-    id: FCE1474F-C1CA-4CE9-86DE-C9FBA0186326
-    notes: |-
-      Align the controls with the tab labels.
-      Reference: https://example.test/design
-    subtasks:
-      - title: Check the narrow window
-        id: 85030864-B67E-4E90-9EFD-5282EBFD975D
-  - title: Remove the unused screen
-    id: 89591A84-451D-481F-BCB9-44B4D6ECDF7C
-    completed: true
-```
-
-- Default omitted completion to false; omit empty notes and subtasks when writing. Preserve task order in the file, while the UI presents completed tasks at the bottom.
-- New manually entered tasks can be just `- title: Fix the layout`. Existing IDs must survive every save and migration. Existing UUIDs remain valid; do not shorten or regenerate them for appearance.
-- The app normalizes only missing IDs through a guarded write before those new items become editable. Recheck the file before committing normalization. If saving fails, show the parsed content with a clear save error rather than guessing identities.
-- CLI reads stay read-only and report absent IDs as null. An explicit `normalize` command assigns missing IDs; mutating commands may normalize in the same transaction. An ID-less task cannot be individually selected by the CLI until normalized.
-- Opening manually edited files can therefore produce a canonical save. Document that behavior. The generated header is retained; arbitrary comments and exact formatting are not a round-trip promise.
-- Use a real YAML parser and a deliberately small schema. Reject duplicate keys, unknown fields, duplicate IDs, malformed types, unsupported versions, and deeper subtasks with useful locations/messages instead of dropping data. Do not enable executable/custom object tags. Quote ambiguous scalar strings correctly and preserve multiline text, Unicode, and trailing newlines.
-- Empty lists use `tasks: []`. No timestamps or user-maintained revision counters are required for ordinary editing. Use content fingerprints internally to detect external changes.
-
-The parser is vendored libyaml 0.2.5 under its MIT license, with provenance and checksum recorded in `Vendor/libyaml/README.md`. It builds offline through the direct Swift/C compiler scripts. The Xcode project includes the same parser sources and license; this Mac's incomplete CoreSimulator installation prevents validating the normal Xcode route.
-
-## Storage and CLI architecture
-
-Split storage into a local catalog and portable list documents. The catalog records list IDs and locations, group membership, tab order, and migration state. App-managed files live under Application Support; chosen-folder files live exactly where the user saved them. Both use the same document model and reader/writer. An in-memory aggregate can support the existing UI without becoming a second persisted source of task data.
-
-Route task edits to the owning document and navigation changes to the catalog. Reuse existing expected-field patches, granular Undo, drafts, atomic file replacement, cooperative locks, and recovery handling. Backups, recovery files, and lock bookkeeping should stay in app-managed storage keyed by document identity where possible; avoid adding noisy backup trees to coding repositories. Do not mutate `.gitignore` automatically.
-
-Observe each document and its parent directory so editor saves that replace the file are detected. Re-read and validate before writing. Handle each list independently so one missing drive or malformed file does not block the rest. Keep parsed last-good content and drafts available for recovery, with their stale/error state explicit.
-
-The CLI remains a local process API with JSON responses and literal stdin/file inputs. Add direct `--file PATH` access so agents can work in a repo without registering that list in the app. Keep catalog-backed selection for personal lists, change public terminology to lists, and provide explicit init/open/normalize operations. Retain existing expected-value edit behavior and actionable conflicts. Document compatibility aliases for existing project-oriented commands rather than silently changing their meaning. No server or network API is required.
-
-App and CLI writes cooperate through the same lock and validation protocol. Arbitrary text editors do not take that lock: content checks detect many conflicts but cannot guarantee that a truly simultaneous external write will never race. Preserve recovery copies and local drafts, and never describe this as unconditional lossless merging. Cross-list bulk transactions are outside the initial cutover.
-
-Move File writes and validates the destination before updating the catalog, then removes the original only if it still matches the moved content. Keep a small recoverable operation record for interrupted moves; an error must not leave two actively linked copies or destroy the last good file. Relinking changes the catalog path without changing portable identity. Bookmark/path handling should support native folder selection and a useful Locate fallback.
-
-## Existing-data migration
-
-Existing users first receive app-managed YAML lists. They can then Move File into repositories at their own pace. Do not guess destinations, delete existing repository `todo.md` files, or force a conversion on unrelated files.
-
-1. Flush current drafts and preserve the original workspace bytes, backups, and relevant preferences. Record a migration manifest so an interrupted run can resume safely.
-2. Stage and validate one document per current project, preserving list/task/subtask IDs, names, notes, completion, and ordering.
-3. Stage the catalog with the current groups and list order. Transfer navigation and draft preferences using stable IDs rather than treating a changed path as a new list.
-4. Publish the catalog last through atomic replacement as the migration commit point. Several document writes are not one atomic filesystem transaction; the manifest and staged layout provide recovery.
-5. After that commit, the updated app and CLI use the new repository layer exclusively. Keep the legacy JSON as a clearly documented recovery artifact, not an active second store. Retain any later YAML edits during rollback or repair; do not restore an old snapshot over new work.
-
-The branding rename precedes this migration. Keep legacy data and preferences identifiers during that rename so it does not introduce a separate, unnecessary data migration. Migration implementation must account for old installed app/CLI copies: mark and detect completed cutovers where possible, and explicitly direct users to update old binaries before editing again.
+The cutover established one portable YAML document per list, a separate local
+catalog, guarded app/CLI writes, staged legacy migration with catalog publication
+as the commit point, and recovery that preserves original content. The current
+schema, compatibility identifiers, migration safeguards, relocation, concurrency
+limitations, and index/list recovery behavior now live in [STORAGE.md](STORAGE.md).
+Consult that reference for later additions such as task deadlines.
 
 ## Implementation sequence and completion checks
 

@@ -1,10 +1,10 @@
-# Chit: design and implementation plan
+# Chit: current design and behavior
 
-Updated 30 September 2026 for the list-file cutover. This brief defines the interface and behavior; [CUTOVER_PLAN.md](./CUTOVER_PLAN.md) records the migration and implementation plan, and [README.md](../README.md) records build/use instructions. These documents supersede conflicting proposals in the earlier research memos.
+Current interface and behavior, updated 1 October 2026. [STORAGE.md](STORAGE.md) defines storage, migration, and recovery; [CUTOVER_PLAN.md](CUTOVER_PLAN.md) retains the completed cutover plan and evidence; [README.md](../README.md) records build/use instructions. These current references supersede conflicting proposals in historical plans and research memos.
 
 **A small floating window for task lists: open it, add or check something, hide it, and continue working. Agents edit the same tasks without interrupting you.**
 
-## Agreed direction
+## Product direction
 
 - Dark mode only, using Catppuccin Mocha and a softly blurred background. Keep text and controls fully opaque.
 - A softly fading outer edge, without a hard window outline or native shadow. The background should visibly reveal blurred content behind it, with adjustable opacity.
@@ -13,9 +13,9 @@ Updated 30 September 2026 for the list-file cutover. This brief defines the inte
 - Named tabs for roughly 6–10 lists, organized into one level of collapsible groups.
 - The first click on a task edits its title; subsequent single clicks toggle inline details immediately across the full row width: one level of subtasks, followed by freeform notes with links. Blank-space clicks collapse details and clear row selection.
 - A simple local command lets agents read, add, edit, complete, and reopen tasks. UI and command use the same store.
-- Keep the interface simple. Additional task fields, dashboards, activity feeds, and permanent sync indicators are unnecessary.
+- Keep optional task deadlines quiet and the interface simple. Dashboards, activity feeds, and permanent sync indicators are unnecessary.
 
-The selected visual source was the Mocha mockup, retained locally at `docs/archive/design-discussion/mocha-blurred-sketch.html`, with `mocha-blurred-preview.png` alongside it. These optional [historical artifacts](./README.md#historical-material) are ignored by Git; the implemented app is `build/Chit.app`. The behavior and engineering defaults below guided implementation.
+The selected visual source was the Mocha mockup, retained locally at `docs/archive/design-discussion/mocha-blurred-sketch.html`, with `mocha-blurred-preview.png` alongside it. These optional [historical artifacts](./README.md#historical-material) are ignored by Git; the implemented app is `build/Chit.app`. The behavior below describes the implemented app.
 
 ## The visible interface
 
@@ -60,9 +60,9 @@ The strip wraps rather than shrinking labels to fit. Review 6–10 mixed lists, 
 
 ## Task behavior
 
-| Action | Proposed behavior |
+| Action | Current behavior |
 | --- | --- |
-| Add task | Type a title and press Return. Save it and keep the add entry ready. Ignore empty or whitespace-only additions. |
+| Add task | Type a title and press Return. Insert the new task at the top, directly below the add entry, and keep the entry ready. Ignore empty or whitespace-only additions. |
 | Click completion circle | Toggle only that task's completion. Completed top-level tasks move to a collapsible Completed section at the bottom; reopening returns them to the active list. |
 | First click on a task row/title | Select the task and focus its title for native text editing, without opening its details. |
 | Click the selected row/title again | Toggle details immediately on each subsequent single click, including the full-width row background. Keep the title editable in either state. Preserve native double-click selection and drag selection; a double-click's first click may toggle details, and its second click selects text without another toggle. |
@@ -71,7 +71,9 @@ The strip wraps rather than shrinking labels to fit. Review 6–10 mixed lists, 
 | Close details | Preserve edits and collapse the extra content. |
 | Edit title | Use native selection, clipboard, and Undo. Return commits; Shift-Return inserts a line break. Pasted line breaks stay in one task. |
 | Edit notes | Plain multiline text, without a formatting toolbar. Return inserts a line break. Keep URLs literal and offer the native open-link action. |
-| Add subtask | Use the quiet add-subtask entry inside the expanded task. One level of children only. |
+| Add subtask | Use the quiet add-subtask entry inside the expanded task. Insert the new child above existing subtasks. One level of children only. |
+| Set/edit/remove deadline | Use the task menu to choose a local date and time or remove the deadline. Deadlines apply only to top-level tasks. An overdue unfinished task stays highlighted on its row and list tab until completed, rescheduled, or cleared. |
+| Reorder tasks | Drag the six-dot row handle within the same list and completion section, or choose Move earlier / Move later. Notes and subtasks move with the task; task Undo restores the order. |
 | Complete parent or child | States are independent. No automatic cascading, completion counters, or parent progress indicators. |
 | Delete task or subtask | Use a native context/menu action with Undo. Deleting a parent includes its children. |
 | Clear an existing title | Keep it as an unsaved draft and require a title or an explicit delete; do not silently delete the task or its notes. |
@@ -91,26 +93,20 @@ Keep the panel floating and visible when another app becomes active. Reopening r
 
 SwiftUI supplies the views, AppKit the native panel/menu-bar integration, and TodoCore the document/catalog operations shared with the CLI. Each list has one authoritative versioned YAML file. Both app-managed and chosen-folder files have identical capabilities. A pinned vendored YAML parser handles syntax; schema checks reject duplicate/unknown fields and invalid types rather than discarding data.
 
-Tasks use stable IDs, title, optional notes, completion, and one level of subtasks. Omitted completion is false, and empty notes/children are omitted from canonical saves. A manual addition needs only a title. The app assigns missing IDs in a guarded save before editing; CLI reads return null IDs without changing the file, and normalize assigns them explicitly. Preserve existing IDs, Unicode, multiline text, and trailing newlines. Preserve the generated agent header; exact hand formatting and arbitrary comments are not a round-trip promise.
-
-The local catalog records file links and tab/group organization, with no authoritative task copies. Window preferences and drafts stay in local preferences. Migration stages YAML documents, retains the original JSON, and publishes the catalog last. It must be restartable and preserve stable identities so navigation and drafts survive. The old workspace path remains a compatibility anchor for isolated stores and preference keys. See the cutover plan for relocation and migration commit details.
-
-App and CLI operations read the latest file under a shared cooperative lock, validate expected fields, and atomically replace its bytes. A stale conflicting text patch fails without changing the file. Unrelated field changes can merge, and setting the already-requested value is a no-op. Native editor saves are observed through file/parent watchers; content checks detect many concurrent changes, but an arbitrary editor can race because it does not use the app's lock.
-
-The command supports lists/groups, read, init/open/normalize, add task/subtask, title/notes edits, and explicit completion/reopening. Direct `--file` access does not require catalog registration. Keep JSON responses and literal argument/stdin/file inputs. Retain projects/--project aliases for existing automation. No server or network API is required.
+Tasks use stable IDs, title, optional notes and deadline, completion, and one level of subtasks. Manual additions need only a title. The app normalizes missing IDs before enabling editing; CLI reads leave files unchanged. The local catalog holds file links and tab/group organization, while drafts and window preferences stay local. [STORAGE.md](STORAGE.md) defines the portable schema, canonical saves, compatibility paths, migration, guarded writes, and recovery. [CLI.md](CLI.md) defines agent operations, expected-value patches, and compatibility aliases.
 
 UI refresh applies changes by stable identity and preserves caret, selection, scroll, composition, and dirty drafts. Completing a task externally while notes are being edited must not replace its editor. Competing text edits retain the local draft and offer Keep mine / Use updated, with a fresh check before resolving.
 
 Save after a short pause and flush at meaningful transitions. Granular Undo changes affected fields or entities without reversing unrelated agent edits. Missing/bad files retain local drafts and isolate their errors; durably retained unavailable-list drafts must not trap the whole app open. Recovery targets the affected list and preserves replaced content first.
 
-An unreadable list index gets its own compact recovery state, with Retry, Rebuild List Index, and diagnostic details. Rebuilding is reviewed inline: show found lists with file locations and selection controls, report skipped files, and allow choosing additional YAML files through the standalone native picker. Explain that groups and order reset. Preserve the original index before replacing it; never rewrite task files or discard drafts during index recovery. Offer Start Empty when nothing is selected, with a clear route to Open List afterward. Refuse an outdated recovery plan if another process has repaired the index or changed a selected file.
+An unreadable list index gets a compact recovery state with Retry, Rebuild List Index, and diagnostic details. Review found lists and locations inline, choose additional files when needed, and explain that groups and order reset. Start Empty restores New/Open when nothing is selected. Recovery safeguards and failure limits are in [STORAGE.md](STORAGE.md#recovery-and-failure-handling).
 
 ## Acceptance and verification
 
-The implementation sequence and data-failure scenarios are in [CUTOVER_PLAN.md](./CUTOVER_PLAN.md). Check a complete New/Open/Edit/Move/Hide/Delete/Locate workflow, manual YAML editing, CLI edits while the app is open or closed, migration/restart, per-list errors, drafts, and Undo. Tests use isolated files. Layout review uses representative content at normal and narrow widths; do not substitute tests of styling constants for actual rendering.
+Use [Chit Lab](CHIT_LAB.md#choose-the-smallest-check) for proportional validation and [STORAGE.md](STORAGE.md) for current data-failure contracts. The completed cutover sequence and evidence remain in [CUTOVER_PLAN.md](CUTOVER_PLAN.md). Check a complete New/Open/Edit/Move/Hide/Delete/Locate workflow, manual YAML editing, CLI edits while the app is open or closed, migration/restart, per-list errors, drafts, and Undo. Tests use isolated files. Layout review uses representative content at normal and narrow widths; do not substitute tests of styling constants for actual rendering.
 
-See README for completed checks and remaining limits. Native captures demonstrate composition; they do not establish live blur, real input-method behavior, VoiceOver, Spaces, or physical monitor changes. The direct compiler/XCTest fallback supports this Mac's incomplete Xcode installation without changing global tool settings.
+See the cutover plan for historical completed checks and remaining limits; they are not a current test run. Native captures demonstrate composition; they do not establish live blur, real input-method behavior, VoiceOver, Spaces, or physical monitor changes. The direct compiler/XCTest fallback supports this Mac's incomplete Xcode installation without changing global tool settings.
 
 ## Scope boundary
 
-Keep dates, priorities, tags, reminders, recurring tasks, rich text, attachments, search, task drag reordering, task movement between lists, cloud sync, mobile apps, accounts, agent delete, MCP, automatic updates, and public distribution outside this build. The goal is a dependable small local app, not a general project-management system.
+Keep priorities, task tags, reminders, recurring tasks, rich text, attachments, search, task movement between lists, cloud sync, mobile apps, accounts, agent delete, MCP, automatic updates, and public distribution outside this build. The goal is a dependable small local app, not a general project-management system.
