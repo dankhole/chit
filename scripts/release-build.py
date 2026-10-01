@@ -86,6 +86,16 @@ def sign(path, options, preserve=False):
     return None
 
 
+def distribution_info(options):
+    with (REPO / "Resources/Info.plist").open("rb") as source:
+        info = plistlib.load(source)
+    info.update(CFBundleExecutable="Chit", CFBundleIdentifier="local.dcole.TotTodo",
+                CFBundleShortVersionString=options.version, CFBundleVersion=options.version,
+                LSMinimumSystemVersion="14.0", SUFeedURL=options.feed_url,
+                SUPublicEDKey=options.public_ed_key, SUVerifyUpdateBeforeExtraction=True)
+    return info
+
+
 def build(options):
     validate_options(options)
     # Never follow a redirected build/release tree or reuse an incomplete app bundle.
@@ -138,14 +148,8 @@ def build(options):
     shutil.copytree(dependency / "Sparkle.framework", framework, symlinks=True)
     shutil.copy2(REPO / "Vendor/libyaml/LICENSE", app / "Contents/Resources/libyaml-LICENSE")
     shutil.copy2(dependency / "LICENSE", app / "Contents/Resources/Sparkle-LICENSE")
-    with (REPO / "Resources/Info.plist").open("rb") as source:
-        info = plistlib.load(source)
-    info.update(CFBundleExecutable="Chit", CFBundleIdentifier="local.dcole.TotTodo",
-                CFBundleShortVersionString=options.version, CFBundleVersion=options.version,
-                LSMinimumSystemVersion="14.0", SUFeedURL=options.feed_url,
-                SUPublicEDKey=options.public_ed_key)
     with (app / "Contents/Info.plist").open("wb") as output:
-        plistlib.dump(info, output)
+        plistlib.dump(distribution_info(options), output)
     nested = [framework / "Versions/B/Autoupdate", framework / "Versions/B/Updater.app",
               framework / "Versions/B/XPCServices/Downloader.xpc", framework / "Versions/B/XPCServices/Installer.xpc",
               framework]
@@ -177,7 +181,8 @@ def build(options):
                                   "signed": bool(options.signing_identity), "notarized": False,
                                   "team": next(iter(teams), None), "feed_url": options.feed_url,
                                   "sparkle_version": json.loads((REPO / "config/sparkle.json").read_text())["version"]}, indent=2) + "\n")
-    print(f"Built universal {'Developer ID signed' if options.signing_identity else 'ad-hoc validation-only'} app: {app}")
+    print(f"Built universal {'Developer ID signed' if options.signing_identity else 'ad-hoc signed'} app: {app}")
+    print("Release packaging and Ed25519 update archive signing are still required.")
 
 
 def main():
@@ -187,7 +192,7 @@ def main():
     parser.add_argument("--public-ed-key", required=True, help="Public Ed25519 update key (never a private key)")
     signing = parser.add_mutually_exclusive_group(required=True)
     signing.add_argument("--signing-identity", help="Developer ID Application certificate name or SHA1 hash")
-    signing.add_argument("--ad-hoc", action="store_true", help="Validation only; cannot produce a publishable build")
+    signing.add_argument("--ad-hoc", action="store_true", help="Ad-hoc code signing without Apple notarization; update archive signing is still required")
     parser.add_argument("--sparkle-archive", help="Use a local official archive after pinned checksum verification")
     options = parser.parse_args()
     os.environ.setdefault("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")

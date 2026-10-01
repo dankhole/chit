@@ -1,7 +1,7 @@
 # Project documentation
 
 - [Project README](../README.md): installation and daily use.
-- [Releasing](RELEASING.md): distribution setup, signed releases, Sparkle, and Homebrew.
+- [Releasing](RELEASING.md): distribution setup, signed Sparkle updates, and Homebrew.
 - [Chit Lab](CHIT_LAB.md): isolated agent development and native validation.
 - [Agent guide](AGENT_GUIDE.md): task writing, converting existing todos, and copyable `AGENTS.md` instructions.
 - [CLI](CLI.md): shared list operations for agents.

@@ -75,6 +75,9 @@ class PublicationGuards(unittest.TestCase):
         (root / 'metadata/appcast.xml').write_text('<rss/>\n')
         (root / 'metadata/chit.rb').write_text('cask "chit" do\nend\n')
         receipt = {'signed': True, 'notarized': True, 'stapled': True,
+                   'signing_mode': 'notarized', 'release_ready': True,
+                   'code_signature_verified': True, 'sparkle_verified': True,
+                   'archive_sha256': digest,
                    'version': '1.0.1', 'architectures': ['arm64', 'x86_64'],
                    'feed_url': 'https://github.com/owner/public-releases/releases/latest/download/appcast.xml'}
         receipt.update(receipt_changes)
@@ -117,9 +120,9 @@ class PublicationGuards(unittest.TestCase):
     def test_development_receipt_cannot_create_release(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.fixture(root, signed=False, notarized=False)
+            self.fixture(root, signed=False, notarized=False, release_ready=False)
             with self.assertRaisesRegex(ValueError, 'development artifacts'):
-                publisher.publish(self.api, '1.0.1', root)
+                publisher.publish(self.api, '1.0.1', root, mode='notarized')
         self.assertEqual(self.api.mutations, [])
 
     def test_wrong_feed_cannot_create_release(self):
@@ -127,7 +130,7 @@ class PublicationGuards(unittest.TestCase):
             root = Path(directory)
             self.fixture(root, feed_url='https://private.invalid/feed')
             with self.assertRaisesRegex(ValueError, 'stable feed'):
-                publisher.publish(self.api, '1.0.1', root)
+                publisher.publish(self.api, '1.0.1', root, mode='notarized')
         self.assertEqual(self.api.mutations, [])
 
     def test_wrong_checksum_cannot_create_release(self):
@@ -136,7 +139,7 @@ class PublicationGuards(unittest.TestCase):
             self.fixture(root)
             (root / 'Chit-1.0.1.zip.sha256').write_text('incorrect\n')
             with self.assertRaisesRegex(ValueError, 'checksum'):
-                publisher.publish(self.api, '1.0.1', root)
+                publisher.publish(self.api, '1.0.1', root, mode='notarized')
         self.assertEqual(self.api.mutations, [])
 
     def test_asset_digest_failure_preserves_unpublished_draft(self):
@@ -146,7 +149,7 @@ class PublicationGuards(unittest.TestCase):
             self.fixture(root)
             with contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaisesRegex(ValueError, 'asset verification'):
-                    publisher.publish(self.api, '1.0.1', root)
+                    publisher.publish(self.api, '1.0.1', root, mode='notarized')
         self.assertTrue(self.api.rows[0]['draft'])
         self.assertFalse(any(method == 'PATCH' for method, _, _ in self.api.mutations))
 
@@ -154,12 +157,66 @@ class PublicationGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.fixture(root)
-            publisher.publish(self.api, '1.0.1', root)
+            publisher.publish(self.api, '1.0.1', root, mode='notarized')
         self.assertEqual(len(self.api.uploaded), 4)
         self.assertEqual(self.api.mutations[-1][0:2], ('PATCH', '/releases/10'))
         self.assertFalse(self.api.rows[0]['draft'])
         self.assertEqual(self.api.rows[0]['make_latest'], 'true')
         self.assertFalse(self.api.rows[0]['generate_release_notes'])
+        self.assertIn('Developer ID signed, notarized, and stapled', self.api.rows[0]['body'])
+
+    def test_verified_ad_hoc_release_publishes_without_apple_trust_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root, signed=False, notarized=False, stapled=False, signing_mode='ad-hoc')
+            publisher.publish(self.api, '1.0.1', root, mode='ad-hoc')
+        self.assertFalse(self.api.rows[0]['draft'])
+        self.assertIn('ad-hoc signed and is not Apple notarized', self.api.rows[0]['body'])
+        self.assertIn('Open Anyway', self.api.rows[0]['body'])
+        self.assertIn('Sparkle EdDSA signatures', self.api.rows[0]['body'])
+        self.assertNotIn('Developer ID signed', self.api.rows[0]['body'])
+
+    def test_notarized_mode_never_downgrades_to_ad_hoc_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root, signed=False, notarized=False, stapled=False, signing_mode='ad-hoc')
+            with self.assertRaisesRegex(ValueError, 'no downgrade'):
+                publisher.publish(self.api, '1.0.1', root, mode='notarized')
+        self.assertEqual(self.api.mutations, [])
+
+    def test_ad_hoc_mode_requires_truthful_no_apple_trust_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root, signing_mode='ad-hoc')
+            with self.assertRaisesRegex(ValueError, 'signing mode'):
+                publisher.publish(self.api, '1.0.1', root, mode='ad-hoc')
+        self.assertEqual(self.api.mutations, [])
+
+    def test_final_archive_changes_after_signature_verification_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            archive = root / 'Chit-1.0.1.zip'
+            archive.write_bytes(b'changed after verification')
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            archive.with_suffix('.zip.sha256').write_text(f'{digest}  {archive.name}\n')
+            with self.assertRaisesRegex(ValueError, 'Sparkle-verified archive'):
+                publisher.publish(self.api, '1.0.1', root, mode='notarized')
+        self.assertEqual(self.api.mutations, [])
+
+    def test_ad_hoc_development_artifact_without_signature_verification_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root, signed=False, notarized=False, stapled=False,
+                         signing_mode='ad-hoc', sparkle_verified=False)
+            with self.assertRaisesRegex(ValueError, 'development artifacts'):
+                publisher.publish(self.api, '1.0.1', root, mode='ad-hoc')
+        self.assertEqual(self.api.mutations, [])
+
+    def test_unknown_mode_is_refused_without_network_or_mutations(self):
+        with self.assertRaisesRegex(ValueError, 'explicit ad-hoc or notarized'):
+            publisher.publish(self.api, '1.0.1', Path('/unused'), mode='automatic')
+        self.assertEqual(self.api.mutations, [])
 
     def test_versions_are_strict_numeric_stable(self):
         for invalid in ('1.0', '01.0.1', '1.0.1-beta', '1.0.1\n', 'v1.0.1'):

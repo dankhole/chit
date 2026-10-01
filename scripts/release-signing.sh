@@ -1,29 +1,35 @@
 #!/bin/bash
 # CI release only. Keep signing material in a private temporary directory and
-# package only the stapled application, never this directory or the tool cache.
+# package only the application, never this directory or the tool cache.
 set +x
 set -euo pipefail
 umask 077
 
 fail() { printf 'Release signing: %s\n' "$*" >&2; exit 1; }
-if [[ $# != 3 ]]; then
-  fail 'usage: release-signing.sh VERSION FEED_URL PUBLIC_ED_KEY'
+if [[ $# != 5 || $1 != --mode ]]; then
+  fail 'usage: release-signing.sh --mode {ad-hoc|notarized} VERSION FEED_URL PUBLIC_ED_KEY'
 fi
-version=$1
-feed_url=$2
-public_ed_key=$3
+mode=$2
+version=$3
+feed_url=$4
+public_ed_key=$5
+[[ $mode == ad-hoc || $mode == notarized ]] || fail 'Mode must be ad-hoc or notarized; no fallback is permitted.'
 [[ $(uname -s) == Darwin ]] || fail 'macOS is required.'
 [[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'VERSION must be MAJOR.MINOR.PATCH.'
 
-required=(APPLE_DEVELOPER_ID_CERTIFICATE_P12 APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD
-  APPLE_NOTARY_KEY_P8 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID
-  APPLE_TEAM_ID SPARKLE_PRIVATE_KEY DISTRIBUTION_REPOSITORY)
+required=(SPARKLE_PRIVATE_KEY DISTRIBUTION_REPOSITORY)
+if [[ $mode == notarized ]]; then
+  required+=(APPLE_DEVELOPER_ID_CERTIFICATE_P12 APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD
+    APPLE_NOTARY_KEY_P8 APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID APPLE_TEAM_ID)
+fi
 for name in "${required[@]}"; do
   [[ -n ${!name:-} ]] || fail "Missing required secret or variable: $name"
 done
-[[ $APPLE_TEAM_ID =~ ^[A-Z0-9]{10}$ ]] || fail 'APPLE_TEAM_ID must be a ten-character team identifier.'
-[[ $APPLE_NOTARY_KEY_ID =~ ^[A-Za-z0-9]{10,}$ ]] || fail 'APPLE_NOTARY_KEY_ID must be an alphanumeric API key identifier of at least ten characters.'
-[[ $APPLE_NOTARY_ISSUER_ID =~ ^[0-9a-fA-F-]{36}$ ]] || fail 'APPLE_NOTARY_ISSUER_ID must be a UUID.'
+if [[ $mode == notarized ]]; then
+  [[ $APPLE_TEAM_ID =~ ^[A-Z0-9]{10}$ ]] || fail 'APPLE_TEAM_ID must be a ten-character team identifier.'
+  [[ $APPLE_NOTARY_KEY_ID =~ ^[A-Za-z0-9]{10,}$ ]] || fail 'APPLE_NOTARY_KEY_ID must be an alphanumeric API key identifier of at least ten characters.'
+  [[ $APPLE_NOTARY_ISSUER_ID =~ ^[0-9a-fA-F-]{36}$ ]] || fail 'APPLE_NOTARY_ISSUER_ID must be a UUID.'
+fi
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
@@ -51,7 +57,7 @@ trap 'exit 143' TERM
 # Reject malformed Sparkle material before invoking sign_update, whose own
 # malformed-key error messages can contain its input. The exported key's public
 # half must match the key embedded in the distributed app.
-export CHIT_SIGNING_DIRECTORY="$private_dir" CHIT_PUBLIC_ED_KEY="$public_ed_key"
+export CHIT_SIGNING_DIRECTORY="$private_dir" CHIT_PUBLIC_ED_KEY="$public_ed_key" CHIT_SIGNING_MODE="$mode"
 python3 - <<'PY'
 import base64, os, pathlib, sys, uuid
 root = pathlib.Path(os.environ['CHIT_SIGNING_DIRECTORY'])
@@ -59,19 +65,20 @@ try:
     public = base64.b64decode(os.environ['CHIT_PUBLIC_ED_KEY'], validate=True)
     secret_text = os.environ['SPARKLE_PRIVATE_KEY'].strip()
     secret = base64.b64decode(secret_text, validate=True)
-    certificate = base64.b64decode(os.environ['APPLE_DEVELOPER_ID_CERTIFICATE_P12'], validate=True)
-    uuid.UUID(os.environ['APPLE_NOTARY_ISSUER_ID'])
     if len(public) != 32 or len(secret) not in (32, 64, 96):
         raise ValueError('key mismatch')
-    if not certificate:
-        raise ValueError('empty certificate')
-    notary_key = os.environ['APPLE_NOTARY_KEY_P8'].strip() + '\n'
-    if not notary_key.startswith('-----BEGIN PRIVATE KEY-----\n') or not notary_key.endswith('-----END PRIVATE KEY-----\n'):
-        raise ValueError('invalid API key')
+    if os.environ['CHIT_SIGNING_MODE'] == 'notarized':
+        certificate = base64.b64decode(os.environ['APPLE_DEVELOPER_ID_CERTIFICATE_P12'], validate=True)
+        uuid.UUID(os.environ['APPLE_NOTARY_ISSUER_ID'])
+        if not certificate:
+            raise ValueError('empty certificate')
+        notary_key = os.environ['APPLE_NOTARY_KEY_P8'].strip() + '\n'
+        if not notary_key.startswith('-----BEGIN PRIVATE KEY-----\n') or not notary_key.endswith('-----END PRIVATE KEY-----\n'):
+            raise ValueError('invalid API key')
+        (root / 'certificate.p12').write_bytes(certificate)
+        (root / 'AuthKey.p8').write_text(notary_key)
 except (ValueError, KeyError):
     sys.exit('Release signing: invalid certificate/API key or Sparkle private/public key configuration (values withheld).')
-(root / 'certificate.p12').write_bytes(certificate)
-(root / 'AuthKey.p8').write_text(notary_key)
 (root / 'sparkle.key').write_text(secret_text + '\n')
 PY
 unset APPLE_DEVELOPER_ID_CERTIFICATE_P12 APPLE_NOTARY_KEY_P8 SPARKLE_PRIVATE_KEY
@@ -79,6 +86,7 @@ xcrun swiftc -O scripts/release-verify.swift -o "$private_dir/release-verify" \
   -module-cache-path "$private_dir/swift-cache"
 "$private_dir/release-verify" key "$private_dir/sparkle.key" "$public_ed_key"
 
+if [[ $mode == notarized ]]; then
 security list-keychains -d user > "$private_dir/keychains.txt"
 while IFS= read -r item; do original_keychains+=("$item"); done < <(
   python3 - "$private_dir/keychains.txt" <<'PY'
@@ -118,10 +126,18 @@ PY
 
 scripts/release-build.sh --version "$version" --feed-url "$feed_url" \
   --public-ed-key "$public_ed_key" --signing-identity "$identity"
+else
+  # Ad-hoc code signing ensures bundle integrity without Apple credentials.
+  # Sparkle's pinned Ed25519 key authenticates the update archive separately.
+  unset APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD
+  scripts/release-build.sh --version "$version" --feed-url "$feed_url" \
+    --public-ed-key "$public_ed_key" --ad-hoc
+fi
 app="$repo_root/build/release/Chit.app"
 archive="$repo_root/build/release/Chit-$version.zip"
 [[ -d $app && ! -e $archive ]] || fail 'Expected built application and an unused final archive path.'
 codesign --verify --deep --strict --verbose=2 "$app"
+if [[ $mode == notarized ]]; then
 # Apple accepts ZIP submissions, but the ticket is stapled to the app. Recreate
 # the final archive after stapling, then sign those exact published bytes.
 ditto -c -k --sequesterRsrc --keepParent "$app" "$private_dir/notary-submission.zip"
@@ -142,6 +158,14 @@ xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 spctl --assess --type execute --verbose=2 "$app"
+else
+  codesign --display --verbose=4 "$app" > "$private_dir/codesign.txt" 2>&1
+  python3 - "$private_dir/codesign.txt" <<'PY'
+import pathlib, sys
+if 'Signature=adhoc' not in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    sys.exit('Release signing: ad-hoc mode did not produce an ad-hoc application signature.')
+PY
+fi
 ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
 
 sign_update="$repo_root/build/release/dependencies/sparkle/bin/sign_update"
@@ -158,16 +182,20 @@ fi
 "$private_dir/release-verify" archive "$archive" "$signature" "$public_ed_key"
 python3 scripts/release-metadata.py --version "$version" --archive "$archive" \
   --signature "$signature" --repository "$DISTRIBUTION_REPOSITORY" \
-  --output-directory build/release/metadata
-shasum -a 256 "$archive" | sed "s|  $repo_root/build/release/|  |" > "$archive.sha256"
-python3 - "$repo_root/build/release/build.json" <<'PY'
-import json, pathlib, sys
+  --mode "$mode" --output-directory build/release/metadata
+python3 - "$repo_root/build/release/build.json" "$archive" "$mode" <<'PY'
+import hashlib, json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
+archive = pathlib.Path(sys.argv[2])
+mode = sys.argv[3]
 receipt = json.loads(path.read_text())
-if receipt.get('signed') is not True:
-    sys.exit('Release signing: builder receipt did not confirm Developer ID signing.')
-receipt['notarized'] = True
-receipt['stapled'] = True
+if receipt.get('signed') is not (mode == 'notarized'):
+    sys.exit('Release signing: builder receipt does not match the requested signing mode.')
+digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+archive.with_suffix('.zip.sha256').write_text(f'{digest}  {archive.name}\n')
+receipt.update(signing_mode=mode, code_signature_verified=True,
+               sparkle_verified=True, release_ready=True, archive_sha256=digest,
+               notarized=mode == 'notarized', stapled=mode == 'notarized')
 path.write_text(json.dumps(receipt, indent=2) + '\n')
 PY
-printf 'Signed, notarized, stapled, and Sparkle-verified archive ready: %s\n' "${archive##*/}"
+printf '%s application with Sparkle-verified archive ready: %s\n' "$mode" "${archive##*/}"

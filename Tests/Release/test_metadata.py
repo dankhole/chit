@@ -79,6 +79,8 @@ class ReleaseMetadata(unittest.TestCase):
         self.assertIn('binary "#{appdir}/Chit.app/Contents/Resources/bin/chit"', cask)
         self.assertIn("auto_updates true", cask)
         self.assertIn("depends_on macos: :sonoma", cask)
+        self.assertIn("not notarized by Apple", cask)
+        self.assertIn("Open Anyway in System Settings > Privacy & Security", cask)
         self.assertNotIn("@VERSION@", cask)
         self.assertNotIn("@SHA256@", cask)
         self.assertNotIn(":no_check", cask)
@@ -89,13 +91,28 @@ class ReleaseMetadata(unittest.TestCase):
         first_appcast, first_cask = self.generate()
         first_checksum = first_cask.read_text()
         first_length = ET.parse(first_appcast).find("channel/item/enclosure").get("length")
-        self.make_archive(b"synthetic stapled and repacked payload with changed bytes")
+        self.make_archive(b"synthetic signed and repacked payload with changed bytes")
         second_appcast, second_cask = self.generate()
         self.assertNotEqual(second_cask.read_text(), first_checksum)
         self.assertIn(hashlib.sha256(self.archive.read_bytes()).hexdigest(), second_cask.read_text())
         second_length = ET.parse(second_appcast).find("channel/item/enclosure").get("length")
         self.assertNotEqual(second_length, first_length)
         self.assertEqual(second_length, str(self.archive.stat().st_size))
+
+    def test_notarized_mode_omits_first_launch_caveat_without_changing_appcast(self):
+        ad_hoc_appcast, _ = self.generate()
+        original_appcast = ad_hoc_appcast.read_bytes()
+        notarized_appcast, cask_path = self.generate(mode="notarized", output_directory=self.root / "notarized")
+        self.assertEqual(notarized_appcast.read_bytes(), original_appcast)
+        cask = cask_path.read_text()
+        self.assertNotIn("caveats", cask)
+        self.assertNotIn("not notarized", cask)
+        self.assertNotIn("@CAVEATS@", cask)
+
+    def test_invalid_signing_mode_is_rejected_before_writing(self):
+        with self.assertRaisesRegex(ValueError, "mode"):
+            self.generate(mode="unsigned")
+        self.assertFalse(self.output.exists())
 
     def test_distribution_repository_controls_every_external_link(self):
         appcast_path, cask_path = self.generate(repository="dankhole/chit-releases")

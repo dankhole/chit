@@ -74,7 +74,7 @@ jobs:
           retention-days: 7
 
   release:
-    name: Sign, notarize, and publish stable release
+    name: Sign and publish stable release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: macos-15
     timeout-minutes: 60
@@ -83,7 +83,8 @@ jobs:
     env:
       DISTRIBUTION_REPOSITORY: ${{ vars.DISTRIBUTION_REPOSITORY || github.repository }}
       SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      APPLE_TEAM_ID: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && vars.APPLE_TEAM_ID || '' }}
+      RELEASE_SIGNING_MODE: ${{ vars.RELEASE_SIGNING_MODE || 'ad-hoc' }}
     outputs:
       version: ${{ steps.configuration.outputs.version }}
       repository: ${{ steps.configuration.outputs.repository }}
@@ -98,11 +99,11 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           SOURCE_REPOSITORY: ${{ github.repository }}
           HAS_DISTRIBUTION_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN != '' }}
-          APPLE_DEVELOPER_ID_CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12 }}
-          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
-          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_P12: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12 || '' }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD || '' }}
+          APPLE_NOTARY_KEY_P8: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_NOTARY_KEY_P8 || '' }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_NOTARY_KEY_ID || '' }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_NOTARY_ISSUER_ID || '' }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           python3 - <<'PY'
@@ -114,9 +115,14 @@ jobs:
           repository = os.environ['DISTRIBUTION_REPOSITORY']
           if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', repository):
               sys.exit('DISTRIBUTION_REPOSITORY must be owner/name on github.com.')
-          names = ['SPARKLE_PUBLIC_KEY', 'APPLE_TEAM_ID', 'APPLE_DEVELOPER_ID_CERTIFICATE_P12',
-                   'APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD', 'APPLE_NOTARY_KEY_P8',
-                   'APPLE_NOTARY_KEY_ID', 'APPLE_NOTARY_ISSUER_ID', 'SPARKLE_PRIVATE_KEY']
+          mode = os.environ['RELEASE_SIGNING_MODE']
+          if mode not in ('ad-hoc', 'notarized'):
+              sys.exit('RELEASE_SIGNING_MODE must be ad-hoc or notarized. No automatic fallback is permitted.')
+          names = ['SPARKLE_PUBLIC_KEY', 'SPARKLE_PRIVATE_KEY']
+          if mode == 'notarized':
+              names += ['APPLE_TEAM_ID', 'APPLE_DEVELOPER_ID_CERTIFICATE_P12',
+                        'APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD', 'APPLE_NOTARY_KEY_P8',
+                        'APPLE_NOTARY_KEY_ID', 'APPLE_NOTARY_ISSUER_ID']
           missing = [name for name in names if not os.environ.get(name)]
           if repository.lower() != os.environ['SOURCE_REPOSITORY'].lower() and os.environ['HAS_DISTRIBUTION_TOKEN'] != 'true':
               missing.append('DISTRIBUTION_TOKEN (separate public destination)')
@@ -130,7 +136,7 @@ jobs:
                   assert secret[-32:] == public
           except (ValueError, AssertionError):
               sys.exit('Sparkle public/private key configuration is invalid or mismatched (values withheld).')
-          if not re.fullmatch(r'[A-Z0-9]{10}', os.environ['APPLE_TEAM_ID']):
+          if mode == 'notarized' and not re.fullmatch(r'[A-Z0-9]{10}', os.environ['APPLE_TEAM_ID']):
               sys.exit('APPLE_TEAM_ID must be a ten-character team identifier.')
           feed = f'https://github.com/{repository}/releases/latest/download/appcast.xml'
           with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
@@ -143,24 +149,24 @@ jobs:
         run: |
           python3 scripts/release-publish.py preflight \
             --repository "$DISTRIBUTION_REPOSITORY" --version "$RELEASE_VERSION"
-      - name: Build, notarize, staple, and sign exact update archive
+      - name: Build in selected signing mode and sign exact update archive
         env:
           RELEASE_VERSION: ${{ steps.configuration.outputs.version }}
           RELEASE_FEED: ${{ steps.configuration.outputs.feed }}
-          APPLE_DEVELOPER_ID_CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12 }}
-          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
-          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_P12: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12 || '' }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD || '' }}
+          APPLE_NOTARY_KEY_P8: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_NOTARY_KEY_P8 || '' }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_NOTARY_KEY_ID || '' }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.RELEASE_SIGNING_MODE == 'notarized' && secrets.APPLE_NOTARY_ISSUER_ID || '' }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: scripts/release-signing.sh "$RELEASE_VERSION" "$RELEASE_FEED" "$SPARKLE_PUBLIC_KEY"
+        run: scripts/release-signing.sh --mode "$RELEASE_SIGNING_MODE" "$RELEASE_VERSION" "$RELEASE_FEED" "$SPARKLE_PUBLIC_KEY"
       - name: Upload to draft, verify all assets, and publish as latest
         env:
           GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN || github.token }}
           RELEASE_VERSION: ${{ steps.configuration.outputs.version }}
         run: |
           python3 scripts/release-publish.py publish \
-            --repository "$DISTRIBUTION_REPOSITORY" --version "$RELEASE_VERSION"
+            --repository "$DISTRIBUTION_REPOSITORY" --version "$RELEASE_VERSION" --mode "$RELEASE_SIGNING_MODE"
 
   homebrew:
     name: Open public tap cask pull request
