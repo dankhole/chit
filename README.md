@@ -2,7 +2,7 @@
 
 A small native Mac task app with a dark Mocha window, background blur, list tabs, collapsible groups, optional notes, and one level of subtasks. Each list lives in a readable YAML file. The app, local CLI, and a text editor work on that same file.
 
-The list-file cutover is implemented. Existing app lists migrate to YAML on first launch, retaining the original workspace for recovery. See [CUTOVER_PLAN.md](./CUTOVER_PLAN.md) for the scope and completion evidence.
+The list-file cutover is implemented. Existing app lists migrate to YAML on first launch, retaining the original workspace for recovery. See [list-file storage and migration](./docs/CUTOVER_PLAN.md) for the scope and completion evidence.
 
 ## Build and open
 
@@ -67,7 +67,7 @@ build/chit --file /path/to/repo/todo.yaml read
 build/chit --file /path/to/repo/todo.yaml init --name Website
 ```
 
-Use `init` only for a new file. Direct `--file` access works without opening/registering the list in the app. Agents should prefer the CLI: it preserves identities, checks expected text values, and coordinates with app writes. JSON remains the command response/patch format; YAML is the on-disk list format. See [CLI.md](./CLI.md) for commands, literal text input, conflict handling, and compatibility aliases.
+Use `init` only for a new file. Direct `--file` access works without opening/registering the list in the app. Agents should prefer the CLI: it preserves identities, checks expected text values, and coordinates with app writes. JSON remains the command response/patch format; YAML is the on-disk list format. See [CLI reference](./docs/CLI.md) for commands, literal text input, conflict handling, and compatibility aliases.
 
 The app observes external saves, including editors that replace files atomically. A missing or invalid list reports its own error and keeps unsaved drafts; other lists remain usable. App and CLI writes share locks and compare current content before replacement. An arbitrary editor does not honor those locks, so truly simultaneous external writes can still race. Keep recovery copies and resolve visible conflicts before overwriting another writer's text.
 
@@ -92,55 +92,12 @@ CHIT_DIRECT_BUILD=1 scripts/test.sh
 python3 Tests/CLI/integration.py
 ```
 
-The initial cutover passed 141 automated tests: 69 core/storage tests, 52 app-model tests, and 20 CLI integration tests. These cover file round trips, manual additions, expected-value conflicts, atomic replacement, catalog migration/restart, missing and invalid lists, retained drafts, and CLI access. Parallel branch and code-smell reviews of that cutover are complete, and their findings are addressed. The subsequent Hide/Delete update adds 11 regression tests; its affected catalog and app-model suites pass all 76 tests, using synthetic temporary moves rather than real Trash.
+Use [Chit Lab](./docs/CHIT_LAB.md) for isolated agent builds, snapshots, and native smoke checks. Earlier verification results and captures are retained as [local historical material](./docs/README.md#historical-material); they are not a current test run.
 
-Recovery without a backup adds 13 regression tests. All 89 affected storage and app-model tests pass, along with the direct build. These checks cover preserving files and drafts, rebuilding an empty index, stale previews, and restarting after recovery. A [320 × 240-point preview](./outputs/cutover/catalog-recovery.png) verifies the scrollable review layout and visible action buttons; native file selection remains a hands-on check.
+## Documentation
 
-The direct-compiler build and native smoke check pass. The smoke check was launched through macOS Launch Services after a direct executable launch failed to take focus; it covers show/hide, menu-bar controls, native editing/Undo, composition guards, drop handlers, resizing, and persistence. Existing data was migrated on normal launch and compared with its pre-cutover backup: list/task content and identities remained intact, original JSON bytes were unchanged, and original preference content was retained.
-
-The focused native `--file-panel-test` also passes with an isolated catalog. It checks standalone folder/save dialogs at a screen edge, programmatic frame movement, duplicate-request handling, refocusing, Cancel, and Hide/Quit cleanup. Actual title-bar dragging, keyboard delivery to the native panel service, and accepting Choose/Create remain hands-on checks.
-
-The native preview/smoke/file-panel modes require an explicit isolated `--store`; see [cutover previews](./outputs/cutover/README.md) and [capture notes](./outputs/native-ui/README.md). Physical dragging, VoiceOver, input methods, Spaces, and live blur across desktop backgrounds retain hands-on verification limits.
-
-## Start here
-
-- [Documentation index](./docs/README.md) and [Chit Lab](./docs/CHIT_LAB.md): isolated agent development and validation.
-- [List-file cutover plan](./CUTOVER_PLAN.md): the list-file design, migration decisions, and implementation acceptance criteria.
-- [UI styling guide](./UI_STYLING_GUIDE.md): local copy of the parent-folder design guide.
-- [Research report](./RESEARCH.md): source availability, visual and interaction evidence, automation, existing projects, and the build-versus-adopt recommendation.
-- [Small design brief](./DESIGN.md): the selected interface, editing behavior, agent access, scope boundaries, and acceptance scenarios.
-
-The earlier research used ten parallel research streams, a source review, and an interaction review to choose a small scope and focus on UI and UX. This implementation is original SwiftUI/AppKit code; downloaded reference projects remain research material.
-
-The research reports describe evidence from public primary sources, static source inspection, and official images/videos. Their statements about implementation not having started describe the earlier research milestone; this README and the current design brief take precedence for app status and scope.
-
-## Detailed evidence
-
-| Memo | Scope |
-| --- | --- |
-| [Source audit](./evidence/source-audit.md) | Authentic Tot-related code, licenses, branches, provenance, and limits of availability claims |
-| [Visual design](./evidence/visual-design.md) | Official screenshots and videos, visual structure, states, dimensions versus estimates |
-| [Interaction behavior](./evidence/interaction-behavior.md) | Window modes, focus, shortcuts, accessibility, historical changes |
-| [Editing semantics](./evidence/editing-semantics.md) | Smart Bullets, native editing, rich/plain conversion, checklist interaction proposals |
-| [Automation](./evidence/automation.md) | Shortcuts, URL schemes, published shell scripts, smallest agent interface |
-| [Storage and sync](./evidence/storage-sync.md) | Backups, local data, iCloud evidence, saving and concurrency recommendations |
-| [Native feasibility](./evidence/native-feasibility.md) | SwiftUI/AppKit options, floating panel, keyboard access, local storage |
-| [Minimal product](./evidence/minimal-product.md) | User journeys, scope, visual priorities, acceptance scenarios |
-| [Build and distribution](./evidence/build-distribution.md) | Installed toolchains, local builds versus public downloads, readiness uncertainty |
-| [Public alternatives](./evidence/public-alternatives.md) | Four licensed independent projects, inspected code/releases, adoption tradeoffs |
-| [Preliminary review](./evidence/preliminary-review.md) | Earlier contradictions that informed the final design decisions |
-
-These memos are research inputs. Their individual proposals can differ; the current design brief supersedes them where they disagree. The app has no pin-mode selector, popover mode for the task window, seven-list limit, automatic paste splitting, or broad import/export UI. The later design discussion expanded agent access to editing and completion; the initial research recommendation was read/add only.
-
-The final source review confirmed that Tot's Selected Dot action belongs to Tot 2.0, not 2.1. It also distinguished inspected repository snapshots from downloadable releases: the BetterTot and Tic source snapshots postdate the referenced release artifacts. None of those binaries was tested.
-
-## Preserved materials
-
-- [Official visual references](./evidence/visual-assets/) and [origin/hash manifest](./evidence/visual-assets/manifest.json).
-- [Independent project snapshots and release metadata](./evidence/source-audit/): BetterTot, Tic, TodoPop, and Jot, pinned to the commits documented in the alternatives audit.
-- [Tot-related source evidence](./evidence/source-audit-evidence/): public library code, branch comparisons, and related metadata.
-- Official settings screenshots alongside the memos in [evidence](./evidence/).
-
-The research evidence was preserved in this workspace after synthesis.
-
-Downloaded third-party code and press imagery remain research material. No project was selected as our implementation, no third-party code was executed, and no reference branding or screenshot was adopted as a product asset. The original repositories retain their licenses and notices.
+- [Documentation index](./docs/README.md): current guides and repository layout.
+- [CLI reference](./docs/CLI.md): commands, literal text input, and concurrency semantics.
+- [Product design](./docs/DESIGN.md) and [UI styling](./docs/UI_STYLING_GUIDE.md): interface and behavior guidance.
+- [List-file storage and migration](./docs/CUTOVER_PLAN.md): accepted contracts and completed cutover plan.
+- [Historical material](./docs/README.md#historical-material): local archives and recovery from Git history.

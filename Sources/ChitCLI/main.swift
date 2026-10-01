@@ -52,7 +52,7 @@ missing IDs in the same guarded write. Use normalize before selecting new items.
 \(storageUsage)
 todo remains a compatibility alias for chit.
 Success JSON goes to stdout; error JSON goes to stderr with a nonzero exit.
---help prints this help. See CLI.md for examples and concurrency semantics.
+--help prints this help. See docs/CLI.md for examples and concurrency semantics.
 """
 
 private struct CLIError: Error {

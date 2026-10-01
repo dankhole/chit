@@ -9,3 +9,7 @@ xcuserdata/
 # Generated Python test bytecode
 __pycache__/
 *.py[cod]
+
+# Local historical documents, captures, and downloaded research caches.
+/docs/archive/
+/outputs/

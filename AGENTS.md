@@ -2,7 +2,7 @@
 
 This is a personal, non-DraftKings project. Do not use DraftKings internal MCPs,
 infrastructure, or conventions unless explicitly requested. For interface changes,
-follow `UI_STYLING_GUIDE.md` and preserve the simple, polished user experience.
+follow `docs/UI_STYLING_GUIDE.md` and preserve the simple, polished user experience.
 
 ## Agent development and native validation
 
