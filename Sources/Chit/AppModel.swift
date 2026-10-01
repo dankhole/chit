@@ -420,7 +420,7 @@ final class AppModel: ObservableObject {
     func addSubtask(parentID: String, title: String, projectID: String? = nil) {
         guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard let owner = projectID ?? self.projectID(for: parentID), taskWithID(parentID, projectID: owner) != nil else { return }
-        if perform(.addSubtask(parentID: parentID, subtask: Subtask(title: title), index: nil), name: "Add Subtask", listID: owner) {
+        if perform(.addSubtask(parentID: parentID, subtask: Subtask(title: title), index: 0), name: "Add Subtask", listID: owner) {
             setSubtaskEntry(parentID: parentID, projectID: owner, value: "")
         }
     }

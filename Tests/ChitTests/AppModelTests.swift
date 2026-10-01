@@ -785,6 +785,35 @@ final class AppModelTests: XCTestCase {
         }
     }
 
+    func testAddingSubtasksPrependsAndUndoPreservesExistingOrder() throws {
+        try withFixture { f in
+            let completed = Subtask(title: "Already completed", completed: true)
+            _ = try f.external.apply(.addSubtask(parentID: f.task.id, subtask: completed, index: 0))
+            f.model.refresh()
+            let originalSubtasks = [completed] + f.task.subtasks
+
+            f.model.setSubtaskEntry(parentID: f.task.id, projectID: f.projectID, value: "First new subtask")
+            f.model.addSubtask(parentID: f.task.id, title: "First new subtask", projectID: f.projectID)
+            let first = try XCTUnwrap(try storedTask(f).subtasks.first)
+            XCTAssertEqual(first.title, "First new subtask")
+            XCTAssertEqual(f.model.subtaskEntry(parentID: f.task.id, projectID: f.projectID), "")
+            XCTAssertEqual(try storedTask(f).subtasks, [first] + originalSubtasks)
+
+            f.model.addSubtask(parentID: f.task.id, title: "Second new subtask")
+            let second = try XCTUnwrap(try storedTask(f).subtasks.first)
+            XCTAssertEqual(second.title, "Second new subtask")
+            XCTAssertEqual(try storedTask(f).subtasks, [second, first] + originalSubtasks)
+
+            f.model.undo()
+            XCTAssertEqual(try storedTask(f).subtasks, [first] + originalSubtasks)
+            f.model.undo()
+            XCTAssertEqual(try storedTask(f).subtasks, originalSubtasks)
+            f.model.redo()
+            f.model.redo()
+            XCTAssertEqual(try storedTask(f).subtasks, [second, first] + originalSubtasks)
+        }
+    }
+
     func testExplicitDeleteWorksAfterClearingTaskTitle() throws {
         try withFixture { f in
             f.model.setText(itemID: f.task.id, field: .title, value: "")

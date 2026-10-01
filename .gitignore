@@ -13,3 +13,6 @@ __pycache__/
 # Local historical documents, captures, and downloaded research caches.
 /docs/archive/
 /outputs/
+
+# Personal project todos
+/docs/todo.yaml

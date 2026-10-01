@@ -423,10 +423,6 @@ private struct TaskRow: View {
                         .help("Edit deadline")
                         .background(TaskBarControlBounds(taskID: task.id))
                     }
-                    ForEach(task.subtasks) { subtask in
-                        SubtaskRow(model: model, subtask: subtask, projectID: projectID)
-                            .background(TaskBarControlBounds(taskID: task.id))
-                    }
                     HStack(alignment: .top, spacing: 3) {
                         Image(systemName: "plus").font(.system(size: 13))
                             .foregroundStyle(Mocha.secondary).frame(width: 22, height: Mocha.textRowHeight)
@@ -453,6 +449,10 @@ private struct TaskRow: View {
                         .accessibilityLabel("Task actions")
                     }
                     .background(TaskBarControlBounds(taskID: task.id))
+                    ForEach(task.subtasks) { subtask in
+                        SubtaskRow(model: model, subtask: subtask, projectID: projectID)
+                            .background(TaskBarControlBounds(taskID: task.id))
+                    }
                     NativeTextEditor(text: text(.notes, task.notes), identity: "\(task.id):notes", placeholder: "Add notes or a link…", fontSize: 13, secondary: true, links: true, deadlineActions: nativeDeadlineActions, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
                         model.setText(itemID: task.id, field: .notes, value: value, expectedBase: base, projectID: projectID)
                     })
