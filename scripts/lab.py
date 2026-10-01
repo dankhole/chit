@@ -18,6 +18,7 @@ RUNS = LAB / "runs"
 TEMPLATE = LAB / "template"
 MARKER = "Chit Lab session v1\n"
 TIMEOUT = 180
+VISIBLE_SNAPSHOT_FLAGS = ("backdrop", "contained-backdrop", "new-list")
 
 
 class LabError(Exception):
@@ -192,8 +193,9 @@ def run_harness(root, operation, options):
         if snapshot_path.exists():
             raise LabError(f"Capture already exists; choose a fresh output path: {snapshot_path}")
         arguments += ["--snapshot", str(snapshot_path)]
+        arguments += ["--lab-visible" if options.visible else "--lab-hidden"]
         if options.visible:
-            arguments += ["--lab-visible"]
+            print("snapshot: displaying Lab UI for capture.", flush=True)
         for flag in ("expand", "size"):
             value = getattr(options, "snapshot_" + flag)
             if value:
@@ -249,7 +251,7 @@ def main():
     descriptions = {
         "open": "Show the session's Lab app for interactive validation.",
         "cli": "Run the scoped CLI without showing Lab UI.",
-        "snapshot": "Capture Lab UI hidden by default; backdrop and new-list captures display windows.",
+        "snapshot": "Capture Lab UI hidden by default; window captures require --visible.",
         "smoke": "Run native smoke checks; displays Lab UI and takes keyboard focus.",
         "file-panels": "Run native file-panel checks; displays Lab UI and takes keyboard focus.",
     }
@@ -265,8 +267,14 @@ def main():
             command_parser.add_argument("--snapshot-size")
             command_parser.add_argument("--snapshot-collapse", action="append", default=[])
             for flag in ("solid", "contrast", "backdrop", "contained-backdrop", "completed", "new-list", "recovery"):
-                command_parser.add_argument("--snapshot-" + flag, action="store_true")
+                help_text = "Displays windows; requires --visible" if flag in VISIBLE_SNAPSHOT_FLAGS else None
+                command_parser.add_argument("--snapshot-" + flag, action="store_true", help=help_text)
     options = parser.parse_args()
+    if options.command == "snapshot" and not options.visible:
+        window_flags = ["--snapshot-" + flag for flag in VISIBLE_SNAPSHOT_FLAGS
+                        if getattr(options, "snapshot_" + flag.replace("-", "_"))]
+        if window_flags:
+            parser.error(f"{', '.join(window_flags)} display windows and require --visible.")
     if options.command == "build":
         owned_directory(LAB)
         owned_directory(TEMPLATE)

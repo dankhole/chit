@@ -15,9 +15,12 @@ same app location. Report whether changes are only in Lab or also running in Chi
 Use the session's scoped CLI and synthetic files; never seed a session from the
 personal catalog. Existing isolated unit tests remain appropriate for core/model
 changes. A fresh Lab session is the reset path.
-Prefer hidden snapshots for layout checks. Use `open`, visible previews, or the
-native interaction harnesses only when validation needs on-screen UI; those
-commands can display windows and native interaction checks can take focus.
+Default to CLI checks and hidden snapshots. Inspect capture files directly; do
+not open Preview, Finder, or the Lab UI just to inspect an image. Use `open`,
+visible previews, or native interaction harnesses only when the affected behavior
+needs on-screen UI. Before a visible check, briefly state what it verifies and
+that it will show windows or take focus. Do not use normal `build.sh`, `launch.sh`,
+`build/chit`, or name-based process termination for Lab validation.
 
 ## Keep validation proportional
 
@@ -28,6 +31,12 @@ into a broad testing or review project.
   and copy-only changes need a diff review, not an app build or test run. Cosmetic
   UI changes generally need a build when code changes and one inspection of the
   affected state, not new automated tests.
+- Identify the affected behavior and the smallest useful check before running it.
+  The commands in `docs/CHIT_LAB.md` are alternatives, not a checklist. Use
+  `scripts/direct-test.sh` with the filters and temporary file-state setup in
+  that guide for model/core changes, rather than the normal Xcode test route.
+  A Lab build does not by itself require smoke checks, file-panel checks, or
+  the isolation suite.
 - For behavior changes, test the affected behavior and relevant regressions.
   Storage, migration, concurrency, and deletion changes warrant focused checks for
   data preservation and failure handling. Use the risk of the actual change to

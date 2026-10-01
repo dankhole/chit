@@ -6,6 +6,9 @@ The list-file cutover is implemented. Existing app lists migrate to YAML on firs
 
 ## Build and open
 
+For agent validation, start with [Chit Lab](./docs/CHIT_LAB.md). The commands in
+this section build and launch personal Chit; they are not Lab validation steps.
+
 Requires macOS 14 or later and an installed Xcode toolchain/SDK. The YAML parser is vendored with its license, so building needs no package downloads, server, or account.
 
 ```sh
@@ -25,8 +28,6 @@ On this Mac, missing Xcode CoreSimulator components prevent the normal `xcodebui
 - **Uninstall:** choose **Quit Chit** and move the app to Trash. This keeps your list files, recovery files, and preferences. Folder-saved lists remain in their chosen folders.
 
 There is no background service or server. The built app runs without Xcode. The repository folder remains `tot-todo`.
-
-For agent development, use the separate [Chit Lab](./docs/CHIT_LAB.md) build with disposable synthetic data. Lab can run beside the personal app and keeps its build outputs, catalog, preferences, and file-state separate.
 
 To use `chit` from any repository, add the installed app's command directory to your shell's PATH. For a copy in `/Applications`, put this in `~/.zprofile`, then start a new terminal:
 
@@ -86,6 +87,10 @@ If the list index cannot load, choose **Rebuild List Index…**. Review the surv
 If no lists can be recovered, **Start Empty** creates a usable empty index while keeping the existing files. Use **Open List…** later to reconnect a repaired or restored file. Rebuilding an index cannot recreate missing task content; that requires another copy. Direct CLI `--file` access continues to work independently of the index. A missing index after a completed cutover is treated as a recovery case, so it cannot silently recreate lists from an older workspace.
 
 ## Verification
+
+For agent work, choose the [smallest Lab or isolated unit-test check](./docs/CHIT_LAB.md#choose-the-smallest-check)
+for the change. The general developer checks below are not a per-fix checklist
+and use the normal build routes.
 
 ```sh
 CHIT_DIRECT_BUILD=1 scripts/test.sh
