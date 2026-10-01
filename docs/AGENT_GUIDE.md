@@ -46,6 +46,15 @@ Keep simple work as one task. Chit supports one subtask level; subtasks have a
 title and completion state, but no notes. Put shared or child-specific context in
 the parent notes. Parent and child completion are independent.
 
+Tasks may have an optional `deadline`: a timezone-aware ISO8601 date-time such as
+`"2026-10-15T17:00:00-04:00"`. Use it for an actual due date and time, preserving
+the user's intended timezone. If a source only names a date and the due time or
+timezone is unclear, keep that detail in notes until clarified. Deadlines belong
+to tasks, not subtasks. The app shows local date and time and warns on unfinished
+overdue tasks; completing, rescheduling into the future, or removing the deadline
+clears the warning. Set or change a deadline with an expected-value JSON patch
+described in the [CLI reference](./CLI.md).
+
 For example:
 
 ```yaml
@@ -114,8 +123,10 @@ persisting an agent's temporary implementation plan.
    structure and a write method that refuses existing files (such as Python's
    `open(path, "x")`). Do not overwrite a file that appeared in the meantime.
    Required root fields are `version: 1`, a string `name`, and `tasks` (use `[]`
-   when empty). Each task requires a string `title`; `notes`, `completed`, and
-   `subtasks` are optional. Omit new IDs so Chit can assign them.
+   when empty). Each task requires a string `title`; `notes`, `completed`,
+   `deadline`, and `subtasks` are optional. A deadline must include a date, time,
+   and explicit timezone; omit it when there is none. Omit new IDs so Chit can
+   assign them.
 3. If the destination **exists**, read it and merge through CLI task/subtask
    commands. Reuse matching tasks rather than reimporting them. Preserve existing
    IDs and unrelated tasks; use expected-value edits to reconcile changed notes.
@@ -124,8 +135,9 @@ persisting an agent's temporary implementation plan.
    CLI additions start incomplete, so use `complete` on returned IDs where needed.
 4. Preserve each checked or unchecked source item's state independently as
    `completed: true` or `false` (omission means false). Move long title detail into
-   notes without dropping its meaning. Keep metadata such as dates, priorities,
-   owners, labels, and source references in notes; do not invent YAML fields.
+   notes without dropping its meaning. Preserve an explicit due date and time
+   with its timezone as `deadline`; keep other dates, priorities, owners, labels,
+   and source references in notes. Do not invent YAML fields.
    Preserve deeper nesting and child notes as labeled text in parent notes, with
    useful first-level checkable subtasks where appropriate. Record the original
    completion states in that text when they cannot be represented as subtasks.

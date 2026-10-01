@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 @testable import TodoCore
@@ -48,6 +49,213 @@ final class AppModelTests: XCTestCase {
 
     private func draft(_ fixture: Fixture, field: AppModel.EditField = .title) -> String {
         fixture.model.text(itemID: fixture.task.id, field: field, fallback: "No draft")
+    }
+
+    func testDeadlineSetClearAndRelaunchPreserveStoredValue() throws {
+        try withFixture { f in
+            let deadline = Date(timeIntervalSince1970: 1_800_000_000)
+            XCTAssertTrue(f.model.setDeadline(deadline, for: f.task, projectID: f.projectID))
+            XCTAssertEqual(try storedTask(f).deadline, deadline)
+
+            let reopened = AppModel(store: f.store, preferences: f.preferences, watchChanges: false)
+            let saved = try XCTUnwrap(reopened.selectedProject?.tasks.first { $0.id == f.task.id })
+            XCTAssertEqual(saved.deadline, deadline)
+            XCTAssertTrue(reopened.setDeadline(nil, for: saved, projectID: f.projectID))
+            XCTAssertNil(try storedTask(f).deadline)
+            XCTAssertFalse(reopened.hasOverdueTasks(projectID: f.projectID))
+        }
+    }
+
+    func testDeadlineUndoAndRedoPreserveUnrelatedExternalEdits() throws {
+        try withFixture { f in
+            let deadline = Date(timeIntervalSince1970: 1_800_000_000)
+            XCTAssertTrue(f.model.setDeadline(deadline, for: f.task, projectID: f.projectID))
+            _ = try f.external.apply(.patchTask(id: f.task.id, patch: TaskPatch(
+                notes: FieldChange(expected: f.task.notes, value: "Agent notes"),
+                completed: FieldChange(expected: false, value: true))))
+
+            f.model.undo()
+            var saved = try storedTask(f)
+            XCTAssertNil(saved.deadline)
+            XCTAssertEqual(saved.notes, "Agent notes")
+            XCTAssertTrue(saved.completed)
+
+            f.model.redo()
+            saved = try storedTask(f)
+            XCTAssertEqual(saved.deadline, deadline)
+            XCTAssertEqual(saved.notes, "Agent notes")
+            XCTAssertTrue(saved.completed)
+        }
+    }
+
+    func testDeadlineRejectsConcurrentSetAndClearAfterModelRefresh() throws {
+        try withFixture { f in
+            let first = Date(timeIntervalSince1970: 1_800_000_000)
+            let second = first.addingTimeInterval(60)
+            let proposed = first.addingTimeInterval(120)
+            _ = try f.external.apply(.patchTask(id: f.task.id, patch: TaskPatch(deadline: FieldChange(expected: nil, value: first))))
+            f.model.refresh()
+            XCTAssertFalse(f.model.setDeadline(proposed, for: f.task, projectID: f.projectID))
+            XCTAssertEqual(try storedTask(f).deadline, first)
+            XCTAssertNotNil(f.model.errorMessage)
+
+            let captured = try storedTask(f)
+            _ = try f.external.apply(.patchTask(id: f.task.id, patch: TaskPatch(deadline: FieldChange(expected: first, value: second))))
+            f.model.refresh()
+            XCTAssertFalse(f.model.setDeadline(nil, for: captured, projectID: f.projectID))
+            XCTAssertEqual(try storedTask(f).deadline, second)
+            XCTAssertNotNil(f.model.errorMessage)
+        }
+    }
+
+    func testDeadlineStatusChangesOnlyAtBoundaryAndCompletionOrReopen() throws {
+        try withFixture { f in
+            let deadline = Date().addingTimeInterval(-60)
+            XCTAssertTrue(f.model.setDeadline(deadline, for: f.task, projectID: f.projectID))
+            let saved = try storedTask(f)
+            f.model.updateDeadlineStatus(at: deadline.addingTimeInterval(-1))
+            XCTAssertFalse(f.model.isOverdue(saved, projectID: f.projectID))
+
+            var publications = 0
+            let observation = f.model.objectWillChange.sink { _ in publications += 1 }
+            f.model.updateDeadlineStatus(at: deadline.addingTimeInterval(1))
+            XCTAssertTrue(f.model.isOverdue(saved, projectID: f.projectID))
+            XCTAssertTrue(f.model.hasOverdueTasks(projectID: f.projectID))
+            XCTAssertEqual(publications, 1)
+            f.model.updateDeadlineStatus(at: deadline.addingTimeInterval(2))
+            XCTAssertEqual(publications, 1, "An unchanged clock tick must not refresh active text editors.")
+            f.model.updateDeadlineStatus(at: deadline.addingTimeInterval(-1))
+            XCTAssertFalse(f.model.hasOverdueTasks(projectID: f.projectID), "Moving the clock backward recalculates overdue state.")
+            XCTAssertEqual(publications, 2)
+            observation.cancel()
+
+            f.model.toggleTask(saved, projectID: f.projectID)
+            let completed = try storedTask(f)
+            XCTAssertEqual(completed.deadline, deadline)
+            XCTAssertFalse(f.model.hasOverdueTasks(projectID: f.projectID))
+            f.model.toggleTask(completed, projectID: f.projectID)
+            XCTAssertTrue(f.model.hasOverdueTasks(projectID: f.projectID))
+            XCTAssertEqual(try storedTask(f).deadline, deadline)
+        }
+    }
+
+    func testDeadlineStatusKeepsListsIndependentAndSuppressesUnavailableData() throws {
+        try withFixture { f in
+            let past = Date().addingTimeInterval(-3600)
+            let future = Date().addingTimeInterval(3600)
+            XCTAssertTrue(f.model.setDeadline(past, for: f.task, projectID: f.projectID))
+            XCTAssertTrue(f.model.createList(name: "Other list"))
+            let otherID = f.model.selectedProjectID
+            f.model.addTask("Future deadline")
+            let otherTask = try XCTUnwrap(f.model.selectedProject?.tasks.first)
+            XCTAssertTrue(f.model.setDeadline(future, for: otherTask, projectID: otherID))
+            XCTAssertTrue(f.model.hasOverdueTasks(projectID: f.projectID))
+            XCTAssertFalse(f.model.hasOverdueTasks(projectID: otherID))
+            XCTAssertFalse(f.model.isOverdue(f.task, projectID: otherID))
+
+            let deadlineTask = try storedTask(f)
+            let listURL = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            let bytes = try Data(contentsOf: listURL)
+            try FileManager.default.removeItem(at: listURL)
+            f.model.refresh()
+            XCTAssertFalse(f.model.hasOverdueTasks(projectID: f.projectID))
+            XCTAssertFalse(f.model.isOverdue(f.task, projectID: f.projectID))
+            XCTAssertFalse(f.model.setDeadline(nil, for: deadlineTask, projectID: f.projectID))
+            try bytes.write(to: listURL)
+            f.model.refresh()
+            XCTAssertTrue(f.model.hasOverdueTasks(projectID: f.projectID))
+
+            try Data("{invalid catalog".utf8).write(to: f.store.catalogURL)
+            f.model.refresh()
+            XCTAssertFalse(f.model.isStoreAvailable)
+            XCTAssertFalse(f.model.hasOverdueTasks(projectID: f.projectID))
+            XCTAssertFalse(f.model.isOverdue(f.task, projectID: f.projectID))
+        }
+    }
+
+    func testDeadlineClockMarksTaskOverdueWithoutRefresh() async throws {
+        let f = try makeFixture(watchChanges: true)
+        defer { cleanUp(f) }
+        XCTAssertTrue(f.model.setDeadline(Date().addingTimeInterval(0.75), for: f.task, projectID: f.projectID))
+        XCTAssertFalse(f.model.hasOverdueTasks(projectID: f.projectID))
+        let timeout = Date().addingTimeInterval(3)
+        while !f.model.hasOverdueTasks(projectID: f.projectID), Date() < timeout {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertTrue(f.model.hasOverdueTasks(projectID: f.projectID))
+    }
+
+    func testDeadlinePreparationIgnoresOtherListInvalidAndConflictingDrafts() throws {
+        try withFixture { f in
+            XCTAssertTrue(f.model.createList(name: "Healthy"))
+            let healthyID = f.model.selectedProjectID
+            f.model.addTask("Healthy task")
+            let healthyTask = try XCTUnwrap(f.model.selectedProject?.tasks.first)
+            f.model.setText(itemID: f.task.id, field: .title, value: "", projectID: f.projectID)
+            f.model.setText(itemID: healthyTask.id, field: .notes, value: "Healthy notes", projectID: healthyID)
+
+            XCTAssertTrue(f.model.prepareDeadlineEditing(projectID: healthyID))
+            XCTAssertEqual(f.model.selectedProject?.tasks.first?.notes, "Healthy notes")
+            XCTAssertEqual(f.model.text(itemID: f.task.id, field: .title, fallback: "No draft", projectID: f.projectID), "")
+            XCTAssertEqual(try storedTask(f).title, f.task.title)
+
+            f.model.setText(itemID: f.task.id, field: .title, value: "Retained local title", projectID: f.projectID)
+            _ = try f.external.apply(.patchTask(id: f.task.id, patch: TaskPatch(title: FieldChange(expected: f.task.title, value: "External title"))))
+            f.model.refresh()
+            XCTAssertFalse(f.model.conflicts(itemID: f.task.id, projectID: f.projectID).isEmpty)
+
+            XCTAssertTrue(f.model.prepareDeadlineEditing(projectID: healthyID))
+            XCTAssertEqual(f.model.text(itemID: f.task.id, field: .title, fallback: "No draft", projectID: f.projectID), "Retained local title")
+            XCTAssertFalse(f.model.conflicts(itemID: f.task.id, projectID: f.projectID).isEmpty)
+            XCTAssertEqual(try storedTask(f).title, "External title")
+        }
+    }
+
+    func testDeadlinePreparationAllowsHealthyListWhileOtherDraftIsUnavailable() throws {
+        try withFixture { f in
+            XCTAssertTrue(f.model.createList(name: "Healthy"))
+            let healthyID = f.model.selectedProjectID
+            f.model.addTask("Healthy task")
+            let healthyTask = try XCTUnwrap(f.model.selectedProject?.tasks.first)
+            f.model.setText(itemID: f.task.id, field: .notes, value: "Retained missing-list notes", projectID: f.projectID)
+            let missingURL = try XCTUnwrap(f.model.location(for: f.projectID)?.url)
+            try FileManager.default.removeItem(at: missingURL)
+            f.model.refresh()
+            XCTAssertTrue(f.model.hasRetainedDrafts(listID: f.projectID))
+
+            XCTAssertTrue(f.model.prepareDeadlineEditing(projectID: healthyID))
+            XCTAssertTrue(f.model.setDeadline(Date(timeIntervalSince1970: 1_800_000_000), for: healthyTask, projectID: healthyID))
+            XCTAssertFalse(f.model.prepareDeadlineEditing(projectID: f.projectID))
+            XCTAssertFalse(f.model.prepareDeadlineEditing(projectID: "missing-project"))
+            XCTAssertEqual(f.model.text(itemID: f.task.id, field: .notes, fallback: "No draft", projectID: f.projectID), "Retained missing-list notes")
+            XCTAssertTrue(f.model.hasRetainedDrafts(listID: f.projectID))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: missingURL.path))
+
+            try Data("{invalid catalog".utf8).write(to: f.store.catalogURL)
+            f.model.refresh()
+            XCTAssertFalse(f.model.prepareDeadlineEditing(projectID: healthyID))
+        }
+    }
+
+    func testDeadlinePreparationRejectsAndPreservesInvalidTargetDraft() throws {
+        try withFixture { f in
+            XCTAssertTrue(f.model.selectTaskForEditing(taskID: f.task.id, projectID: f.projectID))
+            XCTAssertTrue(f.model.toggleDetails(taskID: f.task.id))
+            f.model.setText(itemID: f.task.id, field: .title, value: "", projectID: f.projectID)
+
+            XCTAssertFalse(f.model.prepareDeadlineEditing(projectID: f.projectID))
+            XCTAssertEqual(draft(f), "")
+            XCTAssertEqual(try storedTask(f).title, f.task.title)
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertEqual(f.model.expandedTaskID, f.task.id)
+            XCTAssertNotNil(f.model.errorMessage)
+
+            f.model.setText(itemID: f.task.id, field: .title, value: "Corrected title", projectID: f.projectID)
+            XCTAssertTrue(f.model.prepareDeadlineEditing(projectID: f.projectID))
+            XCTAssertEqual(try storedTask(f).title, "Corrected title")
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertEqual(f.model.expandedTaskID, f.task.id)
+        }
     }
 
     func testRefreshPreservesDirtyTitleWhileExternalWriterAddsAndCompletes() throws {
@@ -526,6 +734,57 @@ final class AppModelTests: XCTestCase {
         }
     }
 
+    func testAddingTasksPrependsBelowEntryAndUndoPreservesExistingOrderAndDetails() throws {
+        try withFixture { f in
+            let completed = TaskItem(title: "Already completed", completed: true)
+            let active = TaskItem(title: "Manually placed first")
+            _ = try f.external.apply(.batch([
+                .addTask(projectID: f.projectID, task: completed, index: 0),
+                .addTask(projectID: f.projectID, task: active, index: 0)
+            ]))
+            f.model.refresh()
+            XCTAssertTrue(f.model.selectTaskForEditing(taskID: f.task.id, projectID: f.projectID))
+            XCTAssertTrue(f.model.toggleDetails(taskID: f.task.id))
+            XCTAssertTrue(f.model.toggleCompleted(projectID: f.projectID))
+            let originalTasks = [active, completed, f.task]
+
+            f.model.entryDrafts[f.projectID] = "First new task"
+            f.model.addTask("First new task")
+            let first = try XCTUnwrap(f.model.selectedProject?.tasks.first)
+            XCTAssertEqual(first.title, "First new task")
+            XCTAssertEqual(f.model.entryDrafts[f.projectID], "")
+            XCTAssertEqual(f.model.taskListEntries(projectID: f.projectID), [
+                .addTask(projectID: f.projectID), .task(first), .task(active), .task(f.task),
+                .completedHeader(projectID: f.projectID, count: 1), .task(completed)
+            ])
+
+            f.model.entryDrafts[f.projectID] = "Second new task"
+            f.model.addTask("Second new task")
+            let second = try XCTUnwrap(f.model.selectedProject?.tasks.first)
+            XCTAssertEqual(second.title, "Second new task")
+            XCTAssertEqual(f.model.entryDrafts[f.projectID], "")
+            XCTAssertEqual(try f.store.load().projects.first { $0.id == f.projectID }?.tasks,
+                           [second, first] + originalTasks)
+            XCTAssertEqual(f.model.taskListEntries(projectID: f.projectID), [
+                .addTask(projectID: f.projectID), .task(second), .task(first), .task(active), .task(f.task),
+                .completedHeader(projectID: f.projectID, count: 1), .task(completed)
+            ])
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertEqual(f.model.expandedTaskID, f.task.id)
+
+            f.model.undo()
+            XCTAssertEqual(try f.store.load().projects.first { $0.id == f.projectID }?.tasks, [first] + originalTasks)
+            f.model.undo()
+            XCTAssertEqual(try f.store.load().projects.first { $0.id == f.projectID }?.tasks, originalTasks)
+            f.model.redo()
+            f.model.redo()
+            XCTAssertEqual(try f.store.load().projects.first { $0.id == f.projectID }?.tasks,
+                           [second, first] + originalTasks)
+            XCTAssertEqual(f.model.selectedTaskID, f.task.id)
+            XCTAssertEqual(f.model.expandedTaskID, f.task.id)
+        }
+    }
+
     func testExplicitDeleteWorksAfterClearingTaskTitle() throws {
         try withFixture { f in
             f.model.setText(itemID: f.task.id, field: .title, value: "")
@@ -555,7 +814,7 @@ final class AppModelTests: XCTestCase {
         }
     }
 
-    func testCompletedSectionDefaultsCollapsedAndKeepsAddEntryBetweenSections() throws {
+    func testCompletedSectionDefaultsCollapsedAndKeepsAddEntryAtTop() throws {
         try withFixture { f in
             let completedFirst = TaskItem(title: "First completed", completed: true)
             let activeSecond = TaskItem(title: "Second active")
@@ -570,12 +829,12 @@ final class AppModelTests: XCTestCase {
 
             XCTAssertFalse(f.model.isCompletedExpanded(projectID: f.projectID))
             XCTAssertEqual(f.model.taskListEntries(projectID: f.projectID), [
-                .task(f.task), .task(activeSecond), .addTask(projectID: f.projectID),
+                .addTask(projectID: f.projectID), .task(f.task), .task(activeSecond),
                 .completedHeader(projectID: f.projectID, count: 2)
             ])
             XCTAssertTrue(f.model.toggleCompleted(projectID: f.projectID))
             XCTAssertEqual(f.model.taskListEntries(projectID: f.projectID), [
-                .task(f.task), .task(activeSecond), .addTask(projectID: f.projectID),
+                .addTask(projectID: f.projectID), .task(f.task), .task(activeSecond),
                 .completedHeader(projectID: f.projectID, count: 2), .task(completedFirst), .task(completedSecond)
             ])
             XCTAssertEqual(try f.store.load(), beforeDisclosure, "Section disclosure is local navigation, not shared task content.")
@@ -599,7 +858,7 @@ final class AppModelTests: XCTestCase {
             var completedTask = f.task
             completedTask.completed = true
             XCTAssertEqual(f.model.taskListEntries(projectID: f.projectID), [
-                .task(activeSecond), .addTask(projectID: f.projectID),
+                .addTask(projectID: f.projectID), .task(activeSecond),
                 .completedHeader(projectID: f.projectID, count: 2), .task(completedTask), .task(completedFirst)
             ])
             XCTAssertEqual(try f.store.load().projects.first { $0.id == f.projectID }?.tasks.map(\.id), originalIDs)
@@ -607,7 +866,7 @@ final class AppModelTests: XCTestCase {
             f.model.toggleTask(completedTask)
 
             XCTAssertEqual(f.model.taskListEntries(projectID: f.projectID), [
-                .task(f.task), .task(activeSecond), .addTask(projectID: f.projectID),
+                .addTask(projectID: f.projectID), .task(f.task), .task(activeSecond),
                 .completedHeader(projectID: f.projectID, count: 1), .task(completedFirst)
             ])
             XCTAssertEqual(try f.store.load().projects.first { $0.id == f.projectID }?.tasks.map(\.id), originalIDs)

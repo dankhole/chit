@@ -43,7 +43,8 @@ NOTES_EDIT: NOTES plus --expected-notes TEXT (or -file / -stdin)
 For edit commands, replace text edit options with one of:
   --patch-json JSON | --patch-file PATH | --patch-stdin
   Example: {"notes":{"expected":"old text","value":"new text"}}
-  Allowed fields: title, notes (task); title (subtask).
+  Allowed fields: title, notes, deadline (task); title (subtask).
+  Deadline expected/value: timezone-aware ISO8601 string or null (no deadline).
 
 Only one input may read stdin. Files/stdin must be UTF-8; trailing newlines
 are preserved. IDs are stable. List names must resolve unambiguously.
@@ -176,7 +177,22 @@ private func findSubtask(_ id: String, in workspace: Workspace) -> Subtask? {
     workspace.projects.lazy.flatMap(\.tasks).flatMap(\.subtasks).first { $0.id == id }
 }
 
-private func changes(_ args: Arguments, allowedFields: Set<String>) throws -> [String: FieldChange<String>] {
+private struct EditChanges {
+    var text: [String: FieldChange<String>] = [:]
+    var deadline: FieldChange<Date?>?
+
+    var isEmpty: Bool { text.isEmpty && deadline == nil }
+}
+
+private func deadlineValue(_ value: Any, member: String) throws -> Date? {
+    if value is NSNull { return nil }
+    guard let text = value as? String, let date = DeadlineTimestamp.parse(text) else {
+        throw CLIError("Deadline '\(member)' must be null or an ISO8601 date-time with an explicit timezone (for example 2026-10-15T17:00:00-04:00).", code: "input")
+    }
+    return date
+}
+
+private func changes(_ args: Arguments, allowedFields: Set<String>) throws -> EditChanges {
     let patchInputs = [args.options["patch-json"] != nil, args.options["patch-file"] != nil, args.flags.contains("patch-stdin")].filter { $0 }.count
     guard patchInputs <= 1 else { throw CLIError("Choose only one patch input.") }
     if patchInputs == 1 {
@@ -189,22 +205,30 @@ private func changes(_ args: Arguments, allowedFields: Set<String>) throws -> [S
         do { object = try JSONSerialization.jsonObject(with: Data(source.utf8)) }
         catch { throw CLIError("Patch is not valid JSON: \(error.localizedDescription)", code: "input") }
         guard let patch = object as? [String: Any], !patch.isEmpty else { throw CLIError("Patch must be a nonempty JSON object.", code: "input") }
-        var result: [String: FieldChange<String>] = [:]
+        var result = EditChanges()
         for (field, rawChange) in patch {
             guard allowedFields.contains(field) else { throw CLIError("Patch field '\(field)' is unsupported. Completion uses complete/reopen.", code: "input") }
-            guard let change = rawChange as? [String: Any], Set(change.keys) == ["expected", "value"], let expected = change["expected"] as? String, let value = change["value"] as? String else {
+            guard let change = rawChange as? [String: Any], Set(change.keys) == ["expected", "value"] else {
+                throw CLIError("Patch field '\(field)' must contain exactly 'expected' and 'value'.", code: "input")
+            }
+            if field == "deadline" {
+                result.deadline = try FieldChange(expected: deadlineValue(change["expected"]!, member: "expected"),
+                                                  value: deadlineValue(change["value"]!, member: "value"))
+                continue
+            }
+            guard let expected = change["expected"] as? String, let value = change["value"] as? String else {
                 throw CLIError("Patch field '\(field)' must contain exactly string 'expected' and 'value'.", code: "input")
             }
-            result[field] = FieldChange(expected: expected, value: value)
+            result.text[field] = FieldChange(expected: expected, value: value)
         }
         return result
     }
-    var result: [String: FieldChange<String>] = [:]
-    for field in allowedFields {
+    var result = EditChanges()
+    for field in allowedFields.subtracting(["deadline"]) {
         let value = try args.text(field)
         let expected = try args.text("expected-" + field)
         guard (value == nil) == (expected == nil) else { throw CLIError("Editing \(field) requires both its new value and --expected-\(field) (literal, file, or stdin).") }
-        if let value, let expected { result[field] = FieldChange(expected: expected, value: value) }
+        if let value, let expected { result.text[field] = FieldChange(expected: expected, value: value) }
     }
     guard !result.isEmpty else { throw CLIError("No fields to edit. Supply a new value and its expected base, or a JSON patch.") }
     return result
@@ -343,13 +367,13 @@ private func run() throws {
     case "edit-task":
         let id = try args.required("task")
         activeEntity = ("task", id)
-        let patch = try changes(args, allowedFields: ["title", "notes"])
-        operation = .patchTask(id: id, patch: TaskPatch(title: patch["title"], notes: patch["notes"]))
+        let patch = try changes(args, allowedFields: ["title", "notes", "deadline"])
+        operation = .patchTask(id: id, patch: TaskPatch(title: patch.text["title"], notes: patch.text["notes"], deadline: patch.deadline))
     case "edit-subtask":
         let id = try args.required("subtask")
         activeEntity = ("subtask", id)
         let patch = try changes(args, allowedFields: ["title"])
-        operation = .patchSubtask(id: id, patch: SubtaskPatch(title: patch["title"]))
+        operation = .patchSubtask(id: id, patch: SubtaskPatch(title: patch.text["title"]))
     case "complete", "reopen":
         guard (args.options["task"] != nil) != (args.options["subtask"] != nil) else { throw CLIError("Supply exactly one of --task ID or --subtask ID.") }
         let desired = command == "complete"

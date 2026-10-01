@@ -403,16 +403,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if smokeTest {
                     try exerciseLifecycle()
                     try await exerciseProjectDrag()
-                    try await exerciseTaskRowClicks()
+                    try await exerciseTaskDrag()
+                    try await exerciseTaskEntry()
                     let previousExpanded = model.expandedTaskID
                     let title = "Native editor smoke \(UUID().uuidString)"
                     model.addTask(title)
                     guard let task = model.selectedProject?.tasks.first(where: { $0.title == title }) else { throw harnessError("Could not create native editor smoke task.") }
                     model.toggleDetails(taskID: task.id)
                     try await Task.sleep(nanoseconds: 250_000_000)
+                    try await exerciseDeadlineMenus(taskID: task.id)
                     try await exerciseNativeEditor(taskID: task.id, title: title)
                     if let task = model.selectedProject?.tasks.first(where: { $0.id == task.id }) { model.deleteTask(task) }
                     if let previousExpanded { model.toggleDetails(taskID: previousExpanded) }
+                    try await exerciseTaskRowClicks()
                 }
                 // Give SwiftUI a run-loop pass after smoke mutations before rendering.
                 try await Task.sleep(nanoseconds: 200_000_000)
@@ -462,8 +465,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toggleFromShortcut()
         try check(panel.isVisible, "Hidden shortcut did not show the panel.")
         let originalProject = model.selectedProjectID
-        model.addTask("Native lifecycle smoke \(UUID().uuidString)")
-        guard let task = model.selectedProject?.tasks.last else { throw harnessError("Could not create smoke task.") }
+        let title = "Native lifecycle smoke \(UUID().uuidString)"
+        model.addTask(title)
+        guard let task = model.selectedProject?.tasks.first, task.title == title else { throw harnessError("Could not create smoke task at the top of the list.") }
         model.setText(itemID: task.id, field: .title, value: "")
         try check(!hidePanel() && panel.isVisible, "An invalid draft did not prevent hiding.")
         try check(applicationShouldTerminate(NSApp) == .terminateCancel, "An invalid draft did not prevent normal quit.")
@@ -591,6 +595,144 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         try check(model.selectedProjectID == selected && state.payload == nil && state.hoveredTarget == nil,
                   "Dragging changed selection or left temporary drop feedback behind.")
         try check(try model.store.load() == model.workspace, "Project drops were not persisted.")
+    }
+
+    private func exerciseTaskDrag() async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        func check(_ value: Bool, _ message: String) throws { if !value { throw harnessError(message) } }
+        let originalProject = model.selectedProjectID
+        let originalSize = panel.contentRect(forFrameRect: panel.frame).size
+        let source = TaskItem(title: "Native draggable task", notes: "Drag keeps notes", subtasks: [Subtask(title: "Drag keeps child")])
+        let anchor = TaskItem(title: "Native task anchor")
+        let done = TaskItem(title: "Native completed task", completed: true)
+        let project = Project(name: "Task drag smoke", tasks: [anchor, done, source])
+        _ = try model.store.apply(.addProject(project: project, index: nil))
+        defer {
+            panel.makeFirstResponder(nil)
+            if let current = try? model.store.load().projects.first(where: { $0.id == project.id }) {
+                _ = try? model.store.apply(.deleteProject(id: project.id, expected: current))
+            }
+            model.refresh()
+            model.selectProject(originalProject)
+            panel.setContentSize(originalSize)
+        }
+        model.refresh()
+        model.selectProject(project.id)
+        model.toggleCompleted(projectID: project.id)
+        panel.setContentSize(NSSize(width: 424, height: 400))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let root = panel.contentView else { throw harnessError("No task drag content view.") }
+        func nativeView(taskID: String, source: Bool = false) throws -> TaskDragView {
+            root.layoutSubtreeIfNeeded()
+            guard let view = descendants(root).compactMap({ $0 as? TaskDragView }).first(where: {
+                $0.task?.id == taskID && $0.projectID == project.id && $0.isSource == source
+            }) else { throw harnessError("Native task grip/drop target was not mounted.") }
+            return view
+        }
+        let grip = try nativeView(taskID: source.id, source: true)
+        let destination = try nativeView(taskID: anchor.id)
+        let completedDestination = try nativeView(taskID: done.id)
+        guard let state = grip.dragState,
+              let title = descendants(root).compactMap({ $0 as? PlainTextView }).first(where: { $0.editorIdentity == "\(anchor.id):title" }) else {
+            throw harnessError("Task drag state or native title was not connected.")
+        }
+        let gripPoint = grip.convert(NSPoint(x: grip.bounds.midX, y: grip.bounds.midY), to: nil)
+        let gripHit = root.hitTest(root.superview?.convert(gripPoint, from: nil) ?? gripPoint)
+        try check(gripHit === grip && grip.bounds.width <= 20 && grip.bounds.height >= 24,
+                  "The visible task grip did not own its compact drag hit area.")
+        let titlePoint = title.convert(NSPoint(x: 30, y: title.textContainerInset.height + 8), to: nil)
+        let titleHit = root.hitTest(root.superview?.convert(titlePoint, from: nil) ?? titlePoint)
+        try check(titleHit === title, "An idle task drop overlay intercepted native title selection.")
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally(); state.finish() }
+        func beginDrag() throws {
+            guard let current = model.selectedProject?.tasks.first(where: { $0.id == source.id }),
+                  let payload = state.begin(task: current, projectID: project.id, model: model) else {
+                throw harnessError("Task drag could not begin from its mounted grip.")
+            }
+            pasteboard.clearContents()
+            pasteboard.setData(try JSONEncoder().encode(payload), forType: TaskDragView.pasteboardType)
+        }
+        try beginDrag()
+        try check(destination.updateDrop(pasteboard: pasteboard, location: NSPoint(x: destination.bounds.midX, y: 1)) == .move && state.hoveredTarget == .before(anchor.id),
+                  "The upper task drop target did not provide insertion feedback.")
+        try check(destination.hitTest(destination.superview?.convert(titlePoint, from: nil) ?? titlePoint) === destination,
+                  "The active task destination did not cover the title area.")
+        _ = try model.store.apply(.patchTask(id: source.id, patch: TaskPatch(notes: FieldChange(expected: source.notes, value: "Concurrent drag notes"))))
+        try check(destination.performDrop(pasteboard: pasteboard, location: NSPoint(x: destination.bounds.midX, y: 1)), "Dropping before a task failed.")
+        try check(model.selectedProject?.tasks.filter { !$0.completed }.map(\.id) == [source.id, anchor.id],
+                  "The upper row drop did not persist task order.")
+        try beginDrag()
+        try check(destination.updateDrop(pasteboard: pasteboard, location: NSPoint(x: destination.bounds.midX, y: destination.bounds.height - 1)) == .move && state.hoveredTarget == .after(anchor.id),
+                  "The lower task drop target did not provide insertion feedback.")
+        try check(destination.performDrop(pasteboard: pasteboard, location: NSPoint(x: destination.bounds.midX, y: destination.bounds.height - 1)), "Dropping after a task failed.")
+        try check(model.selectedProject?.tasks.filter { !$0.completed }.map(\.id) == [anchor.id, source.id],
+                  "The lower row drop did not persist task order.")
+        try beginDrag()
+        try check(completedDestination.updateDrop(pasteboard: pasteboard, location: NSPoint(x: 10, y: 1)) == [] && state.hoveredTarget == nil,
+                  "A task drag offered placement in another completion section.")
+        try check(!completedDestination.performDrop(pasteboard: pasteboard, location: NSPoint(x: 10, y: 1)),
+                  "A task drag crossed completion sections.")
+        try beginDrag()
+        guard let active = state.payload else { throw harnessError("Task drag payload disappeared.") }
+        let foreign = TaskDragPayload(workspaceScope: UUID().uuidString, projectID: active.projectID,
+            taskID: active.taskID, completed: active.completed, expectedOrder: active.expectedOrder)
+        pasteboard.clearContents()
+        pasteboard.setData(try JSONEncoder().encode(foreign), forType: TaskDragView.pasteboardType)
+        let revision = model.workspace.revision
+        try check(!destination.performDrop(pasteboard: pasteboard, location: NSPoint(x: 10, y: 1)) && model.workspace.revision == revision,
+                  "A foreign task payload changed the store.")
+        try beginDrag()
+        pasteboard.clearContents()
+        pasteboard.setString("Arbitrary text", forType: .string)
+        try check(!destination.performDrop(pasteboard: pasteboard, location: NSPoint(x: 10, y: 1)), "A text drop was treated as a task.")
+        try check(state.payload == nil && state.hoveredTarget == nil && model.selectedProjectID == project.id,
+                  "A task drag left feedback behind or changed list selection.")
+        let stored = try model.store.load()
+        let latest = stored.projects.first(where: { $0.id == project.id })?.tasks.first(where: { $0.id == source.id })
+        try check(latest?.notes == "Concurrent drag notes" && latest?.subtasks == source.subtasks && latest?.completed == false,
+                  "Task dragging lost concurrent notes, subtasks, or completion state.")
+        try check(stored == model.workspace, "Native task drops were not persisted.")
+    }
+
+    private func exerciseTaskEntry() async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        guard let project = model.selectedProject, let root = panel.contentView else {
+            throw harnessError("Could not prepare the top task entry check.")
+        }
+        NotificationCenter.default.post(name: ListActions.focusEntry, object: project.id)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        root.layoutSubtreeIfNeeded()
+        guard let entry = descendants(root).compactMap({ $0 as? PlainTextView }).first(where: { $0.editorIdentity == "add:\(project.id)" }),
+              panel.makeFirstResponder(entry) else {
+            throw harnessError("The top task entry was not mounted or could not receive focus.")
+        }
+        let initialY = entry.convert(entry.bounds, to: nil).midY
+        var added: [String] = []
+        defer {
+            panel.makeFirstResponder(nil)
+            for id in added {
+                if let task = model.selectedProject?.tasks.first(where: { $0.id == id }) { model.deleteTask(task) }
+            }
+        }
+        for index in 1...2 {
+            let title = "Top entry smoke \(index) \(UUID().uuidString)"
+            entry.insertText(title, replacementRange: entry.selectedRange())
+            entry.insertNewline(nil)
+            try await Task.sleep(nanoseconds: 150_000_000)
+            root.layoutSubtreeIfNeeded()
+            guard let latest = model.selectedProject, let task = latest.tasks.first, task.title == title else {
+                throw harnessError("Submitting the native task entry did not prepend its task.")
+            }
+            added.insert(task.id, at: 0)
+            guard Array(latest.tasks.prefix(added.count).map(\.id)) == added,
+                  entry.string.isEmpty, panel.firstResponder === entry,
+                  descendants(root).contains(where: { $0 === entry }),
+                  abs(entry.convert(entry.bounds, to: nil).midY - initialY) <= 1 else {
+                throw harnessError("Repeated task additions moved, replaced, or defocused the top entry.")
+            }
+        }
     }
 
     private func exerciseTaskRowClicks() async throws {
@@ -765,9 +907,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let wordPoint = titlePoint()
         try await sendMouse([(.leftMouseDown, wordPoint, 1), (.leftMouseUp, wordPoint, 1)])
         let expansionAfterFirstClick = model.expandedTaskID
-        try await sendMouse([(.leftMouseDown, titlePoint(), 2), (.leftMouseUp, titlePoint(), 2)])
+        let selectionAfterFirstClick = title.selectedRange()
+        let secondClickPoint = titlePoint()
+        let classificationBeforeSecondClick = pointClassification(secondClickPoint)
+        try await sendMouse([(.leftMouseDown, secondClickPoint, 2), (.leftMouseUp, secondClickPoint, 2)])
+        let textLayout = title.textContainer.map { container in
+            "container=\(NSStringFromSize(container.containerSize)), used=\(title.layoutManager.map { NSStringFromRect($0.usedRect(for: container)) } ?? "nil")"
+        } ?? "no container"
         try check(title.selectedRange().length > 0 && model.expandedTaskID == expansionAfterFirstClick,
-                  "The second constituent of a native double-click toggled details or failed to select text.")
+                  "The second constituent of a native double-click toggled details or failed to select text. Before: expanded=\(expansionAfterFirstClick ?? "nil"), selection=\(NSStringFromRange(selectionAfterFirstClick)), firstPoint=\(NSStringFromPoint(wordPoint)), secondPoint=\(NSStringFromPoint(secondClickPoint)); \(classificationBeforeSecondClick). After: \(clickState()), selection=\(NSStringFromRange(title.selectedRange())), mounted=\(descendants(root).contains(where: { $0 === title })), title=\(NSStringFromRect(title.convert(title.bounds, to: nil))), \(textLayout); events=\(deliveredEvents.suffix(6)).")
         title.setSelectedRange(NSRange(location: (title.string as NSString).length, length: 0))
         try await sendMouse([(.leftMouseDown, titlePoint(8), 1), (.leftMouseDragged, titlePoint(92), 1),
                              (.leftMouseUp, titlePoint(92), 1)])
@@ -829,8 +977,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             headerNotifications += 1
         }
         defer { NotificationCenter.default.removeObserver(headerObserver) }
-        try await click(headerWindowPoint)
-        try check(model.selectedTaskIDs[project.id] == nil && model.expandedTaskID == nil,
+        // Verify the window's header boundary deterministically. Native control
+        // trackers can consume a posted synthetic down before NSWindow dispatch;
+        // queue the up for native header tracking, then deliver the down here.
+        let headerTimestamp = ProcessInfo.processInfo.systemUptime
+        eventNumber += 1
+        guard let headerDown = NSEvent.mouseEvent(with: .leftMouseDown, location: headerWindowPoint, modifierFlags: [],
+            timestamp: headerTimestamp, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: eventNumber, clickCount: 1, pressure: 1) else { throw harnessError("Could not create header mouse-down.") }
+        eventNumber += 1
+        guard let headerUp = NSEvent.mouseEvent(with: .leftMouseUp, location: headerWindowPoint, modifierFlags: [],
+            timestamp: headerTimestamp + 0.02, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: eventNumber, clickCount: 1, pressure: 0) else { throw harnessError("Could not create header mouse-up.") }
+        NSApp.postEvent(headerUp, atStart: false)
+        panel.sendEvent(headerDown)
+        try await Task.sleep(nanoseconds: 80_000_000)
+        root.layoutSubtreeIfNeeded()
+        try check(headerNotifications == 1 && model.selectedTaskIDs[project.id] == nil && model.expandedTaskID == nil,
                   "Blank header space did not reset task selection. Before: \(beforeHeaderClick). After: \(clickState()); \(headerClassification); notifications=\(headerNotifications); delivered: \(deliveredEvents.suffix(6)).")
         try await click(titlePoint())
         try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
@@ -844,9 +1007,133 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                   "The selected task's chevron did not open its empty details.")
     }
 
+    private func exerciseDeadlineMenus(taskID: String) async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        guard let root = panel.contentView,
+              model.selectedProject?.tasks.contains(where: { $0.id == taskID }) == true,
+              let event = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [],
+                  timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                  context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else {
+            throw harnessError("Could not prepare deadline menu check.")
+        }
+        let editors = descendants(root).compactMap { $0 as? PlainTextView }.filter {
+            $0.editorIdentity == "\(taskID):title" || $0.editorIdentity == "\(taskID):notes"
+        }
+        guard editors.count == 2 else { throw harnessError("Deadline title and notes editors were not mounted.") }
+        func waitForDeadlinePopup(_ phase: String) async throws -> NSWindow {
+            let limit = ProcessInfo.processInfo.systemUptime + 2
+            while true {
+                if let popup = NSApp.windows.first(where: { window in
+                    window !== panel && window.isVisible && window.contentView.map {
+                        descendants($0).contains { $0 is NSDatePicker }
+                    } == true
+                }) { return popup }
+                let remaining = limit - ProcessInfo.processInfo.systemUptime
+                guard remaining > 0 else { break }
+                try await Task.sleep(nanoseconds: UInt64(min(0.05, remaining) * 1_000_000_000))
+            }
+            let windows = NSApp.windows.map { window in
+                let views = window.contentView.map(descendants) ?? []
+                let types = Set(views.map { String(describing: type(of: $0)) }).sorted().joined(separator: "/")
+                return "\(type(of: window))#\(window.windowNumber)(visible=\(window.isVisible), key=\(window.isKeyWindow), pickers=\(views.filter { $0 is NSDatePicker }.count), views=\(types))"
+            }.joined(separator: "; ")
+            let mounted = editors.map { editor in
+                "\(editor.editorIdentity)(mounted=\(descendants(root).contains { $0 === editor }), window=\(editor.window?.windowNumber ?? -1), marked=\(editor.hasMarkedText()))"
+            }.joined(separator: "; ")
+            let composition = (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
+            throw harnessError("\(phase) did not open its native date and time picker within 2 seconds. error=\(model.errorMessage ?? "nil"), composition=\(composition), storeAvailable=\(model.isStoreAvailable), listAvailable=\(model.isSelectedListAvailable), listIssue=\(String(describing: model.selectedListIssue)), active=\(NSApp.isActive), keyWindow=\(NSApp.keyWindow?.windowNumber ?? -1), editors=[\(mounted)], windows=[\(windows)].")
+        }
+        for editor in editors {
+            guard let menu = editor.menu(for: event),
+                  let item = menu.items.first(where: { $0.title == "Set deadline…" }),
+                  editor.validateUserInterfaceItem(item) else {
+                throw harnessError("Right-click deadline action was missing or disabled on \(editor.editorIdentity).")
+            }
+        }
+        guard let set = editors[0].menu(for: event)?.items.first(where: { $0.title == "Set deadline…" }),
+              let setAction = set.action, NSApp.sendAction(setAction, to: set.target, from: set) else {
+            throw harnessError("Native Set deadline action could not be invoked.")
+        }
+        let popup = try await waitForDeadlinePopup("Set deadline")
+        guard let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: popup.windowNumber,
+            context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) else {
+            throw harnessError("Could not prepare deadline Cancel key event.")
+        }
+        NSApp.sendEvent(escape)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        guard !popup.isVisible,
+              model.selectedProject?.tasks.first(where: { $0.id == taskID })?.deadline == nil else {
+            throw harnessError("Cancelling the deadline picker did not dismiss without saving.")
+        }
+        guard NSApp.sendAction(setAction, to: set.target, from: set) else {
+            throw harnessError("Could not reopen the deadline picker after Cancel.")
+        }
+        let savePopup = try await waitForDeadlinePopup("Reopening deadline after Cancel")
+        guard let popupRoot = savePopup.contentView,
+              let picker = descendants(popupRoot).compactMap({ $0 as? NSDatePicker }).first else {
+            throw harnessError("Could not prepare deadline Save check: its native date picker was not mounted.")
+        }
+        let expected = Date(timeIntervalSince1970: floor(picker.dateValue.timeIntervalSince1970 / 60) * 60)
+        // Route the default action as a key equivalent, without sending Return
+        // through the focused date field's text-editing path.
+        guard let saveKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: savePopup.windowNumber,
+            context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36),
+              savePopup.performKeyEquivalent(with: saveKey) else {
+            throw harnessError("The deadline picker did not handle its Save key equivalent.")
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        guard !savePopup.isVisible,
+              let savedTask = model.selectedProject?.tasks.first(where: { $0.id == taskID }),
+              savedTask.deadline == expected else {
+            throw harnessError("Saving the deadline picker did not persist the displayed date and time (visible=\(savePopup.isVisible), expected=\(expected), saved=\(String(describing: model.selectedProject?.tasks.first(where: { $0.id == taskID })?.deadline))).")
+        }
+        let deadline = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 60)
+        guard model.setDeadline(deadline, for: savedTask, projectID: model.selectedProjectID) else {
+            throw harnessError("Could not set smoke task deadline.")
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        for editor in editors {
+            guard let menu = editor.menu(for: event),
+                  menu.items.contains(where: { $0.title == "Edit deadline…" }),
+                  let remove = menu.items.first(where: { $0.title == "Remove deadline" }),
+                  editor.validateUserInterfaceItem(remove) else {
+                throw harnessError("A saved deadline did not update the native context menu.")
+            }
+        }
+        guard let current = model.selectedProject?.tasks.first(where: { $0.id == taskID }),
+              model.isOverdue(current, projectID: model.selectedProjectID),
+              model.hasOverdueTasks(projectID: model.selectedProjectID),
+              let staleRemove = editors[0].menu(for: event)?.items.first(where: { $0.title == "Remove deadline" }),
+              let action = staleRemove.action else {
+            throw harnessError("The overdue state or native Remove deadline action was missing.")
+        }
+        let updatedDeadline = deadline.addingTimeInterval(3600)
+        _ = try model.store.apply(.patchTask(id: taskID, patch: TaskPatch(deadline: FieldChange(expected: deadline, value: updatedDeadline))),
+                                  owningListID: model.selectedProjectID)
+        model.refresh()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        guard NSApp.sendAction(action, to: staleRemove.target, from: staleRemove),
+              model.selectedProject?.tasks.first(where: { $0.id == taskID })?.deadline == updatedDeadline,
+              model.errorMessage != nil else {
+            throw harnessError("An open native deadline menu overwrote a concurrent deadline change.")
+        }
+        guard let remove = editors[0].menu(for: event)?.items.first(where: { $0.title == "Remove deadline" }),
+              NSApp.sendAction(action, to: remove.target, from: remove),
+              model.selectedProject?.tasks.first(where: { $0.id == taskID })?.deadline == nil else {
+            throw harnessError("The refreshed native Remove deadline action failed.")
+        }
+        print("Deadline native menus passed for task titles and notes, including picker Save, Cancel, removal, and a concurrent change while the menu was open.")
+    }
+
     private func exerciseNativeEditor(taskID: String, title: String) async throws {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         func check(_ value: Bool, _ message: String) throws { if !value { throw harnessError(message) } }
+        // The preceding deadline check uses a transient popover. Restore the
+        // editor's window before testing first-responder command dispatch.
+        panel.makeKeyAndOrderFront(nil)
+        try await Task.sleep(nanoseconds: 100_000_000)
         panel.contentView?.layoutSubtreeIfNeeded()
         guard let root = panel.contentView,
               let editor = descendants(root).compactMap({ $0 as? PlainTextView }).first(where: { $0.string == title }) else {

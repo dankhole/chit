@@ -39,13 +39,15 @@ For a copy in `~/Applications`, use `$HOME/Applications/Chit.app/Contents/Resour
 
 ## Use the app
 
-- Type in **Add a task…** and press Return. Its circle toggles completion. Completed tasks move to the collapsible **Completed** section at the bottom.
+- Type in **Add a task…** at the top of the list and press Return. Each new task appears directly below the entry, above existing tasks. Its circle toggles completion. Completed tasks move to the collapsible **Completed** section at the bottom.
+- Right-click a task and choose **Set deadline…** or **Edit deadline…** to choose a local date and time; **Remove deadline** clears it. An unfinished task whose deadline has passed stays highlighted, with a warning on its row and list tab, until you complete it, move its deadline into the future, or remove the deadline. Saved timestamps include a timezone.
+- Drag the small six-dot handle at the right of a task row to reorder it within its open or completed section. Notes and subtasks move with the task, and task Undo restores the order. The task menu also offers **Move earlier** and **Move later**.
 - Click a task's title or row background to select it for editing. Subsequent single clicks toggle details immediately across the full row width; clicking blank list or header space collapses it and clears selection. The selected task always shows a disclosure control, which toggles details directly. Expanded rows show subtasks above notes. Native double-click and drag text selection remain available. Notes are plain text with clickable links. Return commits titles; Shift-Return inserts a line break. Parent and child completion remain independent.
 - **New List → In Chit** asks for a name and saves the list in app storage. **New List → Choose Folder…** opens a folder browser first, then a native save dialog for the filename, optional Finder tags, and destination. These are movable windows kept on screen, even when Chit sits at the screen edge. The chosen filename supplies the initial list name. Existing files are never silently replaced.
 - **Open List…** opens an existing YAML file in place. A small folder icon identifies lists saved in chosen folders. App-managed lists use plain tab labels.
 - Drag tabs to reorder them or place them in collapsible groups. Grouping changes the local organization, not the files' locations.
 - List menus offer **Show in Finder**, **Copy File Path**, **Copy Agent Instructions**, and **Move File…**. Copy Agent Instructions copies an `AGENTS.md` blurb with this list's file path and task-writing guidance. **Hide List** removes its tab but keeps the file; use **Open List…** to bring it back. **Delete List…** asks for confirmation before moving the list file and its tasks to macOS Trash. This also applies to files saved in repositories. Renaming a list does not rename its file. Use **Locate…** when a file has moved outside Chit.
-- Click the menu-bar checklist or press **Control-Option-Space** to show or hide the panel. Change the shortcut from the app menu. Close, Command-W, and Escape hide the panel; Command-Q quits. While a file picker is open, Command-W or Escape cancels that picker. Hiding or quitting Chit also cancels its file picker.
+- Click the menu-bar checklist or press **Option-W** (the default shortcut) to show or hide the panel. Change the shortcut from the app menu; saved custom shortcuts are preserved. Close, Command-W, and Escape hide the panel; Command-Q quits. While a file picker is open, Command-W or Escape cancels that picker. Hiding or quitting Chit also cancels its file picker.
 - Right-click the menu-bar checklist → **Settings…** to adjust background opacity from 30–100%. Text and controls remain opaque. Command-comma also opens settings.
 
 The panel has no Dock icon, native shadow, or hard outline. The centered hide button shares a compact header with the tabs. Empty header space moves the panel; edges resize it. Text saves after a short pause. Native text Undo and task/group Undo remain available. Window state, list selection, expanded details, and unfinished drafts stay local to the app.
@@ -65,7 +67,7 @@ Every list has one authoritative YAML file, including app-managed lists. A new m
   - title: Check the narrow layout
 ```
 
-Keep existing IDs when editing. Omitted completion means false; notes and subtasks are optional. When Chit opens a manually edited file, it assigns missing IDs in a guarded save before enabling editing. CLI reads leave the file untouched and return absent IDs as null; use `normalize` to assign them explicitly. Saves use a consistent readable layout and retain the generated agent header, but do not preserve arbitrary comments or exact formatting.
+Keep existing IDs when editing. Omitted completion means false; notes, deadlines, and subtasks are optional. A task's `deadline` is a timezone-aware ISO8601 date-time, such as `"2026-10-15T17:00:00-04:00"`; omit it when there is none. Deadlines apply to tasks only. When Chit opens a manually edited file, it assigns missing IDs in a guarded save before enabling editing. CLI reads leave the file untouched and return absent IDs as null; use `normalize` to assign them explicitly. Saves use a consistent readable layout and retain the generated agent header, but do not preserve arbitrary comments or exact formatting.
 
 ```sh
 build/chit lists
@@ -75,7 +77,7 @@ build/chit --file /path/to/repo/todo.yaml read
 build/chit --file /path/to/repo/todo.yaml init --name Website
 ```
 
-Use `init` only for a new file. Direct `--file` access works without opening/registering the list in the app. Agents should prefer the CLI: it preserves identities, checks expected text values, and coordinates with app writes. JSON remains the command response/patch format; YAML is the on-disk list format. See [CLI reference](./docs/CLI.md) for commands, literal text input, conflict handling, and compatibility aliases.
+Use `init` only for a new file. Direct `--file` access works without opening/registering the list in the app. Agents should prefer the CLI: it preserves identities, checks expected values, and coordinates with app writes. JSON remains the command response/patch format; YAML is the on-disk list format. Set, reschedule, or remove deadlines using an expected-value JSON patch. See [CLI reference](./docs/CLI.md) for commands, literal text input, deadline patches, conflict handling, and compatibility aliases.
 
 The app observes external saves, including editors that replace files atomically. A missing or invalid list reports its own error and keeps unsaved drafts; other lists remain usable. App and CLI writes share locks and compare current content before replacement. An arbitrary editor does not honor those locks, so truly simultaneous external writes can still race. Keep recovery copies and resolve visible conflicts before overwriting another writer's text.
 

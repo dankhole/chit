@@ -37,7 +37,7 @@ public struct ListDocument: Codable, Equatable, Sendable {
 
     public init(project: Project) {
         self.init(id: project.id, name: project.name, tasks: project.tasks.map { task in
-            ListTask(id: task.id, title: task.title, notes: task.notes, completed: task.completed,
+            ListTask(id: task.id, title: task.title, notes: task.notes, completed: task.completed, deadline: task.deadline,
                      subtasks: task.subtasks.map { ListSubtask(id: $0.id, title: $0.title, completed: $0.completed) })
         })
     }
@@ -45,7 +45,7 @@ public struct ListDocument: Codable, Equatable, Sendable {
     public func asProject() throws -> Project {
         guard !hasMissingIDs, let id else { throw StoreError.invalid("Normalize the list's missing IDs before editing it.") }
         return Project(id: id, name: name, tasks: tasks.map { task in
-            TaskItem(id: task.id!, title: task.title, notes: task.notes, completed: task.completed,
+            TaskItem(id: task.id!, title: task.title, notes: task.notes, completed: task.completed, deadline: task.deadline,
                      subtasks: task.subtasks.map { Subtask(id: $0.id!, title: $0.title, completed: $0.completed) })
         })
     }
@@ -63,15 +63,26 @@ public struct ListTask: Codable, Equatable, Sendable {
     public var title: String
     public var notes: String
     public var completed: Bool
+    public var deadline: Date?
     public var subtasks: [ListSubtask]
-    public init(id: String? = nil, title: String, notes: String = "", completed: Bool = false, subtasks: [ListSubtask] = []) {
-        self.id = id; self.title = title; self.notes = notes; self.completed = completed; self.subtasks = subtasks
+    public init(id: String? = nil, title: String, notes: String = "", completed: Bool = false, deadline: Date? = nil, subtasks: [ListSubtask] = []) {
+        self.id = id; self.title = title; self.notes = notes; self.completed = completed; self.deadline = deadline; self.subtasks = subtasks
     }
-    private enum CodingKeys: String, CodingKey { case id, title, notes, completed, subtasks }
+    private enum CodingKeys: String, CodingKey { case id, title, notes, completed, deadline, subtasks }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        notes = try c.decode(String.self, forKey: .notes)
+        completed = try c.decode(Bool.self, forKey: .completed)
+        deadline = try c.decodeDeadline(forKey: .deadline)
+        subtasks = try c.decode([ListSubtask].self, forKey: .subtasks)
+    }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id); try c.encode(title, forKey: .title); try c.encode(notes, forKey: .notes)
-        try c.encode(completed, forKey: .completed); try c.encode(subtasks, forKey: .subtasks)
+        try c.encode(completed, forKey: .completed); try c.encodeDeadline(deadline, forKey: .deadline)
+        try c.encode(subtasks, forKey: .subtasks)
     }
 }
 

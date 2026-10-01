@@ -15,3 +15,5 @@ tasks:
   - title: subtasks above details
     id: 709E9885-040E-40C4-B764-07931CCE5F69
     completed: true
+  - title: shortcut to show and hide
+    id: CBAE5B36-BBF4-40E0-ADAB-B13B5B98CF0C

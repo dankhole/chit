@@ -19,6 +19,7 @@ extension Workspace {
             if let groupID = project.groupID, !groupIDs.contains(groupID) { throw StoreError.invalid("Project refers to a missing group.") }
             for task in project.tasks {
                 try checkID(task.id); try nonblank(task.title, "Task title")
+                if let deadline = task.deadline { _ = try DeadlineTimestamp.format(deadline) }
                 for subtask in task.subtasks { try checkID(subtask.id); try nonblank(subtask.title, "Subtask title") }
             }
         }
@@ -78,14 +79,35 @@ extension Workspace {
             let p = try projectIndex(projectID)
             try insert(task, into: &projects[p].tasks, at: index)
             return .deleteTask(id: task.id, expected: task)
+        case .reorderTasks(let projectID, let completed, let update):
+            let p = try projectIndex(projectID)
+            let slots = projects[p].tasks.indices.filter { projects[p].tasks[$0].completed == completed }
+            let currentIDs = slots.map { projects[p].tasks[$0].id }
+            // A drag describes the section as it was when the user grabbed it.
+            // Content edits may merge, but additions, completion changes, and
+            // another reorder invalidate that placement rather than guessing.
+            guard currentIDs == update.expected else {
+                throw StoreError.conflict("Task order or section membership changed. Refresh the list and try again.")
+            }
+            guard Set(currentIDs).count == currentIDs.count,
+                  update.value.count == currentIDs.count,
+                  Set(update.value) == Set(currentIDs) else {
+                throw StoreError.invalid("Task order must contain every task ID in its completion section exactly once.")
+            }
+            guard currentIDs != update.value else { return nil }
+            let tasksByID = Dictionary(uniqueKeysWithValues: slots.map { (projects[p].tasks[$0].id, projects[p].tasks[$0]) })
+            for (slot, id) in zip(slots, update.value) { projects[p].tasks[slot] = tasksByID[id]! }
+            return .reorderTasks(projectID: projectID, completed: completed,
+                                 change: FieldChange(expected: update.value, value: currentIDs))
         case .patchTask(let id, let patch):
             let (p, t) = try taskIndex(id)
             var task = projects[p].tasks[t]
             let title = try change(&task.title, patch.title, field: "title", id: id)
             let notes = try change(&task.notes, patch.notes, field: "notes", id: id)
             let completed = try change(&task.completed, patch.completed, field: "completed", id: id)
+            let deadline = try change(&task.deadline, patch.deadline, field: "deadline", id: id)
             projects[p].tasks[t] = task
-            return title == nil && notes == nil && completed == nil ? nil : .patchTask(id: id, patch: TaskPatch(title: title, notes: notes, completed: completed))
+            return title == nil && notes == nil && completed == nil && deadline == nil ? nil : .patchTask(id: id, patch: TaskPatch(title: title, notes: notes, completed: completed, deadline: deadline))
         case .deleteTask(let id, let expected):
             let (p, t) = try taskIndex(id)
             try expect(projects[p].tasks[t], expected, id: id)

@@ -273,6 +273,9 @@ public final class ListFileStore: @unchecked Sendable {
         case .addTask(let id, let task, let index):
             let routedID = (originalID == nil && id.isEmpty) || sameIdentity(id, normalizedID) ? normalizedID : id
             return .addTask(projectID: routedID, task: task, index: index)
+        case .reorderTasks(let id, let completed, let change):
+            let routedID = (originalID == nil && id.isEmpty) || sameIdentity(id, normalizedID) ? normalizedID : id
+            return .reorderTasks(projectID: routedID, completed: completed, change: change)
         case .patchTask, .deleteTask, .addSubtask, .patchSubtask, .deleteSubtask:
             return operation
         case .batch(let operations):

@@ -22,7 +22,7 @@ build/chit --file todo.yaml normalize
 build/chit --file todo.yaml open
 ```
 
-`read` leaves bytes and IDs untouched. Its `list` response contains `version`, `id`, `name`, and `tasks`; absent list/task/subtask IDs are JSON `null`. Manually added tasks can contain only a title. Use `normalize` to assign their IDs before selecting them individually. Mutation commands normalize only missing IDs in their guarded file transaction, preserving existing IDs.
+`read` leaves bytes and IDs untouched. Its `list` response contains `version`, `id`, `name`, and `tasks`; absent list/task/subtask IDs are JSON `null`. Tasks with deadlines include `deadline` as a timezone-aware ISO8601 string in reads, mutation responses, and conflict snapshots; tasks without deadlines omit it. Manually added tasks can contain only a title. Use `normalize` to assign their IDs before selecting them individually. Mutation commands normalize only missing IDs in their guarded file transaction, preserving existing IDs.
 
 `open --file PATH` registers the existing file in the app's catalog without copying its tasks or rewriting the file. Opening an already linked file reuses that list. A manually authored file without a list ID must be normalized before registration. The app itself normalizes missing IDs when opening or loading a list so that new items become editable. Such a save uses canonical YAML and the agent-facing comment header; arbitrary comments and exact formatting are not preserved.
 
@@ -72,7 +72,7 @@ build/chit edit-task --task TASK_ID \
 
 Text options are `--title`, `--title-file`, `--title-stdin`, and equivalent `notes`, `expected-title`, and `expected-notes` forms. Subtask commands support title only. Avoid shell command substitution for file content because shells can strip trailing newlines.
 
-Alternatively, edit with `--patch-json JSON`, `--patch-file PATH`, or `--patch-stdin`. Do not mix these with individual text edit options. Patches contain only fields to change, each with exactly two string members, `expected` and `value`. Tasks permit `title` and `notes`; subtasks permit `title`. Completion uses dedicated commands.
+Alternatively, edit with `--patch-json JSON`, `--patch-file PATH`, or `--patch-stdin`. Do not mix these with individual text edit options. Patches contain only fields to change, each with exactly two members, `expected` and `value`. Tasks permit `title`, `notes`, and `deadline`; subtasks permit `title`. Title and notes members must be strings. Deadline members must be timezone-aware ISO8601 date-time strings or JSON `null`, which means no deadline. Both members are required, including a `null` expected value when setting the first deadline. Completion uses dedicated commands.
 
 ```sh
 build/chit --file todo.yaml edit-task --task TASK_ID --patch-stdin <<'JSON'
@@ -80,6 +80,22 @@ build/chit --file todo.yaml edit-task --task TASK_ID --patch-stdin <<'JSON'
   "title": {"expected": "Review release notes", "value": "Review final release notes"},
   "notes": {"expected": "", "value": "First line\n第二行\nhttps://example.test/release\n"}
 }
+JSON
+```
+
+Add a task normally, then use its returned ID to set a deadline. To reschedule,
+use the last read deadline as `expected`; to remove it, set `value` to `null`.
+Deadline timestamps use `YYYY-MM-DDTHH:mm:ss[.fraction]` followed by `Z` or an
+offset such as `-04:00`; dates without a time or timezone are rejected. Chit
+returns and saves timestamps in UTC, comparing the instant rather than the
+spelling of the timezone offset.
+
+```sh
+build/chit --file todo.yaml edit-task --task TASK_ID --patch-stdin <<'JSON'
+{"deadline":{"expected":null,"value":"2026-10-15T17:00:00-04:00"}}
+JSON
+build/chit --file todo.yaml edit-task --task TASK_ID --patch-stdin <<'JSON'
+{"deadline":{"expected":"2026-10-15T21:00:00Z","value":null}}
 JSON
 ```
 

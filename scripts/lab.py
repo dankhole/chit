@@ -3,22 +3,32 @@
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 
 
 REPO = Path(__file__).resolve().parent.parent
 LAB = REPO / "build" / "lab"
-RUNS = LAB / "runs"
+LEGACY_RUNS = LAB / "runs"
 TEMPLATE = LAB / "template"
 MARKER = "Chit Lab session v1\n"
 TIMEOUT = 180
 VISIBLE_SNAPSHOT_FLAGS = ("backdrop", "contained-backdrop", "new-list")
+
+
+def runtime_runs(repo):
+    checkout = hashlib.sha256(os.fsencode(repo.resolve())).hexdigest()[:16]
+    return Path(tempfile.gettempdir()).resolve() / ("chit-lab-" + checkout) / "runs"
+
+
+RUNS = runtime_runs(REPO)
 
 
 class LabError(Exception):
@@ -32,10 +42,12 @@ def lab_environment():
     return environment
 
 
-def owned_directory(path):
+def owned_directory(path, mode=0o755):
     if path.resolve() != path:
         raise LabError(f"Lab directory must not use a symbolic link: {path}")
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(mode=mode, parents=True, exist_ok=True)
+    if mode == 0o700 and (path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077):
+        raise LabError(f"Lab runtime directory must be private to the current user: {path}")
     return path
 
 
@@ -47,16 +59,22 @@ def inside(root, path):
 
 
 def session(selector):
-    if LAB.resolve() != LAB or RUNS.resolve() != RUNS:
+    if RUNS.resolve() != RUNS:
         raise LabError("Lab runs directory must be owned by this checkout without symbolic links.")
     path = Path(selector).expanduser()
+    allowed_runs = [RUNS]
     if not path.is_absolute():
         if len(path.parts) != 1 or path.name in (".", ".."):
             raise LabError("Use a session ID or its absolute directory.")
         path = RUNS / path
+    else:
+        # Older repo-local sessions remain available only by explicit full path.
+        allowed_runs.append(LEGACY_RUNS)
     root = path.resolve()
-    if root.parent != RUNS or not root.is_dir():
+    if root.parent not in allowed_runs or not root.is_dir():
         raise LabError(f"Not a session owned by this checkout: {selector}")
+    if root.parent.resolve() != root.parent:
+        raise LabError("Lab runs directory must not use symbolic links.")
     marker = root / ".chit-lab"
     if marker.is_symlink() or not marker.is_file() or marker.read_text() != MARKER:
         raise LabError(f"Missing or invalid Lab session marker: {root}")
@@ -91,7 +109,7 @@ def cli_command(root, arguments):
 
 def seed_cli(root, *arguments):
     result = subprocess.run(cli_command(root, arguments), env=lab_environment(),
-                            text=True, capture_output=True, check=False)
+                            cwd=root, text=True, capture_output=True, check=False)
     if result.returncode:
         raise LabError(f"Could not seed Lab session: {result.stderr.strip()}")
     return json.loads(result.stdout)
@@ -99,7 +117,8 @@ def seed_cli(root, *arguments):
 
 def create_session():
     owned_directory(LAB)
-    owned_directory(RUNS)
+    owned_directory(RUNS.parent, mode=0o700)
+    owned_directory(RUNS, mode=0o700)
     if TEMPLATE.resolve() != TEMPLATE:
         raise LabError("Lab template directory must not use a symbolic link.")
     template_app = TEMPLATE / "Chit Lab.app"
@@ -169,7 +188,7 @@ def create_session():
 def open_session(root):
     app, identifier = bundle(root)
     subprocess.run(["/usr/bin/open", "-n", "-a", str(app), "--args", "--lab-root", str(root), "--lab-visible"],
-                   env=lab_environment(), check=True)
+                   env=lab_environment(), cwd=root, check=True)
     print(f"Launched {app}\nBundle ID: {identifier}")
 
 
@@ -214,13 +233,13 @@ def run_harness(root, operation, options):
             executable = inside(root, app / "Contents" / "MacOS" / "Chit")
             with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
                 launched = subprocess.run([str(executable), *arguments], env=lab_environment(),
-                                          stdout=stdout, stderr=stderr, timeout=TIMEOUT, check=False)
+                                          cwd=root, stdout=stdout, stderr=stderr, timeout=TIMEOUT, check=False)
         else:
             # Native input/focus checks require Launch Services. Its exit status alone
             # reports launch/wait success, so require the app's fresh result below.
             launched = subprocess.run(["/usr/bin/open", "-n", "-W", "-a", str(app),
                                       "--stdout", str(stdout_path), "--stderr", str(stderr_path),
-                                      "--args", *arguments], env=lab_environment(), timeout=TIMEOUT, check=False)
+                                      "--args", *arguments], env=lab_environment(), cwd=root, timeout=TIMEOUT, check=False)
     except subprocess.TimeoutExpired as error:
         raise LabError(f"{operation} timed out; inspect {stderr_path}. "
                        f"The session app may still be running at {app}.") from error
@@ -286,7 +305,7 @@ def main():
         if options.command == "open":
             open_session(root)
         elif options.command == "cli":
-            return subprocess.run(cli_command(root, options.arguments), env=lab_environment(), check=False).returncode
+            return subprocess.run(cli_command(root, options.arguments), env=lab_environment(), cwd=root, check=False).returncode
         else:
             run_harness(root, options.command, options)
     return 0

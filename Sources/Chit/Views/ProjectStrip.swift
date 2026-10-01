@@ -12,15 +12,15 @@ struct ProjectStrip: View {
     @State private var interactiveFrames: [CGRect] = []
 
     var body: some View {
-        HStack(alignment: .top, spacing: 2) {
+        HStack(alignment: .projectHeaderCenter, spacing: 2) {
             PanelCloseControl()
-                .frame(width: 22, height: 26)
+                .frame(width: 22, height: Mocha.headerRowHeight)
                 .background(HeaderControlBounds())
             if LabEnvironment.isEnabled {
                 Text("LAB")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Mocha.secondary)
-                    .frame(height: 26)
+                    .frame(height: Mocha.headerRowHeight)
                     .padding(.trailing, 4)
                     .help("Chit Lab · disposable session")
                     .accessibilityLabel("Chit Lab, disposable session")
@@ -60,12 +60,15 @@ struct ProjectStrip: View {
                 Button("Undo") { model.undo() }.disabled(!model.canUndo)
                 Button("Redo") { model.redo() }.disabled(!model.canRedo)
             } label: {
-                Image(systemName: "plus").font(.system(size: 13)).frame(width: 22, height: 26)
+                Image(systemName: "plus")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Mocha.blue)
+                    .frame(width: 22, height: Mocha.headerRowHeight)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .frame(width: 22, height: 26, alignment: .center)
+            .frame(width: 22, height: Mocha.headerRowHeight, alignment: .center)
             .accessibilityLabel("Lists and groups")
             .help("Create and manage lists and groups")
             .disabled(!model.isStoreAvailable)
@@ -105,10 +108,12 @@ struct ProjectStrip: View {
             HStack(spacing: 4) {
                 if isExternal(project.id) { folderGlyph }
                 Text(project.name)
+                if model.hasOverdueTasks(projectID: project.id) { overdueGlyph }
             }
                 .fontWeight(model.selectedProjectID == project.id ? .semibold : .regular)
                 .foregroundStyle(model.selectedProjectID == project.id ? Mocha.blue : Mocha.text)
-                .padding(.horizontal, 7).padding(.vertical, 6)
+                .padding(.horizontal, 7).padding(.vertical, 4)
+                .frame(minHeight: Mocha.headerRowHeight, alignment: .center)
                 .background(model.selectedProjectID == project.id ? Mocha.selected : Color.clear, in: RoundedRectangle(cornerRadius: 5))
                 .contentShape(Rectangle())
                 .fixedSize(horizontal: false, vertical: true)
@@ -136,6 +141,9 @@ struct ProjectStrip: View {
         let collapsed = model.collapsedGroupIDs.contains(group.id)
         let selected = model.selectedProject
         let active = collapsed && selected?.groupID == group.id ? selected : nil
+        let hasOverdue = collapsed && model.workspace.projects.contains {
+            $0.groupID == group.id && model.hasOverdueTasks(projectID: $0.id)
+        }
         let label = active.map { "\(group.name) · \($0.name)" } ?? group.name
         return Button { model.toggleGroup(group.id) } label: {
             HStack(spacing: 4) {
@@ -146,15 +154,18 @@ struct ProjectStrip: View {
                     if isExternal(active.id) { folderGlyph }
                     Text(active.name).fixedSize(horizontal: false, vertical: true)
                 }
+                if hasOverdue { overdueGlyph }
             }
             .foregroundStyle(collapsed && selected?.groupID == group.id ? Mocha.blue : Mocha.secondary)
-            .padding(.horizontal, 5).padding(.vertical, 6)
+            .padding(.horizontal, 5).padding(.vertical, 4)
+            .frame(minHeight: Mocha.headerRowHeight, alignment: .center)
             .background(dragState.hoveredTarget == .group(group.id) ? Mocha.selected : Color.clear,
                 in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(active.map { "\(group.name), \(locationDescription($0))" } ?? label)
+        .accessibilityLabel((active.map { "\(group.name), \(locationDescription($0))" } ?? label)
+            + (hasOverdue ? ", contains overdue tasks" : ""))
         .help(active.map(locationDescription) ?? group.name)
         .accessibilityValue(collapsed ? "Collapsed group" : "Expanded group")
         .accessibilityHint(collapsed ? "Expand to show lists" : "Collapse lists")
@@ -170,9 +181,17 @@ struct ProjectStrip: View {
         Capsule().fill(Mocha.blue).frame(width: 2, height: 18).allowsHitTesting(false)
     }
 
+    private var overdueGlyph: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 10))
+            .foregroundStyle(Mocha.warning)
+            .accessibilityHidden(true)
+    }
+
     private var ungroupTarget: some View {
         Text("Ungroup").foregroundStyle(Mocha.secondary)
-            .padding(.horizontal, 7).padding(.vertical, 6)
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .frame(minHeight: Mocha.headerRowHeight, alignment: .center)
             .background(dragState.hoveredTarget == .group(nil) ? Mocha.selected : Mocha.hover,
                 in: RoundedRectangle(cornerRadius: 5))
             .overlay {
@@ -232,8 +251,9 @@ struct ProjectStrip: View {
     }
 
     private func locationDescription(_ project: Project) -> String {
-        guard let location = model.location(for: project.id) else { return project.name }
-        return "\(project.name), \(location.isManaged ? "saved in app" : "saved in folder"), \(location.url.path)"
+        let name = project.name + (model.hasOverdueTasks(projectID: project.id) ? ", contains overdue tasks" : "")
+        guard let location = model.location(for: project.id) else { return name }
+        return "\(name), \(location.isManaged ? "saved in app" : "saved in folder"), \(location.url.path)"
     }
 
     @ViewBuilder private func groupActions(_ group: ProjectGroup) -> some View {

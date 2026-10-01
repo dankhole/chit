@@ -773,6 +773,7 @@ private extension TodoStore {
         func visit(_ operation: StoreOperation) throws {
             switch operation {
             case .addTask(let id, _, _): result.contentIDs.insert(id)
+            case .reorderTasks(let id, _, _): result.contentIDs.insert(id)
             case .patchTask(let id, _), .deleteTask(let id, _), .addSubtask(let id, _, _): result.contentIDs.insert(try owningTask(id))
             case .patchSubtask(let id, _), .deleteSubtask(let id, _): result.contentIDs.insert(try owningSubtask(id))
             case .patchProject(let id, let name, let groupID):

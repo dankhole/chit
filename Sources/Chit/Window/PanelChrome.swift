@@ -4,18 +4,18 @@ import SwiftUI
 /// The native close control lives alongside the project tabs in one header.
 @MainActor
 final class PanelChrome: NSView {
-    static let height: CGFloat = 26
+    static let height = Mocha.headerRowHeight
     let closeButton = NSButton()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setAccessibilityElement(false)
         closeButton.cell = CenteredCloseButtonCell(textCell: "")
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Hide Chit")?.withSymbolConfiguration(.init(pointSize: 9, weight: .medium))
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Hide Chit")?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
         closeButton.imagePosition = .imageOnly
         closeButton.isBordered = false
         closeButton.bezelStyle = .regularSquare
-        closeButton.contentTintColor = NSColor(srgbRed: 166 / 255, green: 173 / 255, blue: 200 / 255, alpha: 1)
+        closeButton.contentTintColor = Mocha.nsBlue
         closeButton.toolTip = "Hide Chit (⌘W)"
         closeButton.setAccessibilityLabel("Hide Chit")
         closeButton.target = self
@@ -88,14 +88,13 @@ final class HeaderDragView: NSView {
     }
 }
 
-/// Inline button cells align symbols like text. This close control instead uses
-/// its whole native hit target, with a small downward optical correction.
+/// Inline button cells align symbols like text. Center this control's image in
+/// its native hit target, matching the surrounding header controls.
 private final class CenteredCloseButtonCell: NSButtonCell {
     override func imageRect(forBounds rect: NSRect) -> NSRect {
         guard let image else { return super.imageRect(forBounds: rect) }
-        let downward: CGFloat = controlView?.isFlipped == true ? 1 : -1
         return NSRect(x: rect.midX - image.size.width / 2,
-                      y: rect.midY - image.size.height / 2 + downward,
+                      y: rect.midY - image.size.height / 2,
                       width: image.size.width,
                       height: image.size.height)
     }

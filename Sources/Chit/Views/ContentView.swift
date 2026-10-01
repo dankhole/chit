@@ -14,7 +14,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if displaysCatalogRecovery {
                 CatalogRecoveryHeader()
-                    .padding(.horizontal, 5).padding(.top, 2).padding(.bottom, 5)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
                 Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
                     .padding(.horizontal, 10)
                 CatalogRecoveryView(model: model)
@@ -24,8 +24,7 @@ struct ContentView: View {
                 newListPresented = true
             })
                 .padding(.horizontal, 5)
-                .padding(.top, 2)
-                .padding(.bottom, 5)
+                .padding(.vertical, 2)
             Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
                 .padding(.horizontal, 10)
             CatalogRecoveryNoticeView(model: model)
@@ -185,6 +184,7 @@ private struct ProjectTaskList: View {
     let project: Project
     @State private var topTaskID: String?
     @State private var interactiveFrames: [CGRect] = []
+    @StateObject private var dragState = TaskDragState()
 
     init(model: AppModel, project: Project) {
         self.model = model
@@ -202,7 +202,7 @@ private struct ProjectTaskList: View {
                 ForEach(entries) { item in
                     switch item {
                     case .task(let task):
-                        TaskRow(model: model, task: task, projectID: project.id)
+                        TaskRow(model: model, task: task, projectID: project.id, dragState: dragState)
                             .background(TaskInteractiveBounds())
                             .background {
                                 if shadedIDs.contains(task.id) { TaskStripeBackground() }
@@ -233,6 +233,7 @@ private struct ProjectTaskList: View {
         }
         .scrollPosition(id: $topTaskID, anchor: .top)
         .disabled(!model.isSelectedListAvailable)
+        .onDisappear { dragState.finish() }
         .onReceive(NotificationCenter.default.publisher(for: ListActions.focusEntry)) { notification in
             guard notification.object as? String == project.id else { return }
             topTaskID = model.taskListEntries(projectID: project.id).first {
@@ -345,9 +346,15 @@ private struct TaskRow: View {
     @ObservedObject var model: AppModel
     let task: TaskItem
     let projectID: String
+    @ObservedObject var dragState: TaskDragState
     @State private var controlFrames: [CGRect] = []
+    @State private var deadlineEditorPresented = false
+    @State private var deadlineBase: TaskItem?
+    @State private var deadlineDraft = Date()
+    @State private var deadlineSaveError: String?
     private var expanded: Bool { model.expandedTaskID == task.id }
     private var selected: Bool { model.selectedTaskID(projectID: projectID) == task.id }
+    private var overdue: Bool { model.isOverdue(task, projectID: projectID) }
     private var title: String { model.text(itemID: task.id, field: .title, fallback: task.title, projectID: projectID) }
 
     var body: some View {
@@ -358,6 +365,7 @@ private struct TaskRow: View {
                 NativeTextEditor(text: text(.title, task.title), identity: "\(task.id):title",
                     placeholder: expanded ? "" : "Untitled draft", completed: task.completed, submitOnReturn: true,
                     compactTrailingNewlines: !expanded && !selected,
+                    deadlineActions: nativeDeadlineActions,
                     onTitlePointerDown: selectTitle, onTitleSingleClick: {
                         _ = model.clickSelectedTaskTitle(taskID: task.id, projectID: projectID)
                     }, onTitleFocus: {
@@ -365,7 +373,20 @@ private struct TaskRow: View {
                     }, onSubmit: commit, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
                         model.setText(itemID: task.id, field: .title, value: value, expectedBase: base, projectID: projectID)
                     })
-                if selected || expanded || !task.notes.isEmpty || !task.subtasks.isEmpty {
+                if overdue {
+                    Button(action: editDeadline) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Mocha.warning)
+                            .frame(width: 22, height: Mocha.textRowHeight)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(deadlineDescription)
+                    .accessibilityLabel(deadlineDescription + ". Edit deadline")
+                    .background(TaskBarControlBounds(taskID: task.id))
+                }
+                if selected || expanded || !task.notes.isEmpty || !task.subtasks.isEmpty || task.deadline != nil {
                     Button(action: toggleDetails) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 10, weight: .medium))
@@ -378,6 +399,8 @@ private struct TaskRow: View {
                     .accessibilityIdentifier("task-details:\(task.id)")
                     .background(TaskBarControlBounds(taskID: task.id))
                 }
+                taskGrip
+                    .background(TaskBarControlBounds(taskID: task.id))
             }
             .frame(minHeight: 30, alignment: .top)
             if expanded {
@@ -388,6 +411,18 @@ private struct TaskRow: View {
                     }
                     ConflictChoices(model: model, itemID: task.id, projectID: projectID)
                         .background(TaskBarControlBounds(taskID: task.id))
+                    if task.deadline != nil {
+                        Button(action: editDeadline) {
+                            Label(deadlineDescription, systemImage: overdue ? "exclamationmark.triangle.fill" : "calendar")
+                                .font(.system(size: 11))
+                                .foregroundStyle(overdue ? Mocha.warning : Mocha.secondary)
+                                .multilineTextAlignment(.leading)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Edit deadline")
+                        .background(TaskBarControlBounds(taskID: task.id))
+                    }
                     ForEach(task.subtasks) { subtask in
                         SubtaskRow(model: model, subtask: subtask, projectID: projectID)
                             .background(TaskBarControlBounds(taskID: task.id))
@@ -402,6 +437,7 @@ private struct TaskRow: View {
                         })
                         Menu {
                             Button("Close details", action: toggleDetails)
+                            deadlineMenu
                             if !task.subtasks.isEmpty {
                                 Menu("Delete subtask") {
                                     ForEach(task.subtasks) { subtask in
@@ -417,7 +453,7 @@ private struct TaskRow: View {
                         .accessibilityLabel("Task actions")
                     }
                     .background(TaskBarControlBounds(taskID: task.id))
-                    NativeTextEditor(text: text(.notes, task.notes), identity: "\(task.id):notes", placeholder: "Add notes or a link…", fontSize: 13, secondary: true, links: true, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
+                    NativeTextEditor(text: text(.notes, task.notes), identity: "\(task.id):notes", placeholder: "Add notes or a link…", fontSize: 13, secondary: true, links: true, deadlineActions: nativeDeadlineActions, onEndEditing: { _ = model.flushPendingEdits() }, onTextChange: { value, base in
                         model.setText(itemID: task.id, field: .notes, value: value, expectedBase: base, projectID: projectID)
                     })
                     .padding(.top, 3)
@@ -427,6 +463,8 @@ private struct TaskRow: View {
             }
         }
         .padding(.horizontal, 11)
+        .background(overdue ? Mocha.overdueBackground : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5))
         .coordinateSpace(name: task.id)
         .onPreferenceChange(TaskBarControlFrames.self) { controlFrames = $0 }
         .background {
@@ -440,12 +478,118 @@ private struct TaskRow: View {
                 }
             })
         }
+        .overlay {
+            TaskDragHandle(model: model, state: dragState, task: task, projectID: projectID)
+        }
+        .overlay(alignment: .top) {
+            if dragState.hoveredTarget == .before(task.id) { insertionIndicator }
+        }
+        .overlay(alignment: .bottom) {
+            if dragState.hoveredTarget == .after(task.id) { insertionIndicator }
+        }
         .contextMenu {
             Button(task.completed ? "Mark incomplete" : "Mark complete") { model.toggleTask(task, projectID: projectID) }
             Button(expanded ? "Close details" : "Edit task", action: toggleDetails)
             Divider()
+            deadlineMenu
+            Divider()
+            Button("Move earlier") { _ = model.moveTask(task, projectID: projectID, offset: -1) }
+                .disabled(!model.canMoveTask(task, projectID: projectID, offset: -1))
+            Button("Move later") { _ = model.moveTask(task, projectID: projectID, offset: 1) }
+                .disabled(!model.canMoveTask(task, projectID: projectID, offset: 1))
+            Divider()
             Button("Delete task", role: .destructive) { model.deleteTask(task, projectID: projectID) }
         }
+        .popover(isPresented: $deadlineEditorPresented, arrowEdge: .bottom) {
+            deadlineEditor
+        }
+    }
+
+    private var taskGrip: some View {
+        VStack(spacing: 2) {
+            ForEach(0..<3) { _ in
+                HStack(spacing: 2) {
+                    Circle().frame(width: 2, height: 2)
+                    Circle().frame(width: 2, height: 2)
+                }
+            }
+        }
+        .foregroundStyle(Mocha.secondary.opacity(0.65))
+        .frame(width: 16, height: 28)
+        .contentShape(Rectangle())
+        .overlay {
+            TaskDragHandle(model: model, state: dragState, task: task, projectID: projectID, isSource: true)
+        }
+        .help("Drag to reorder task")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Reorder \(title)")
+        .accessibilityAction(named: "Move earlier") { _ = model.moveTask(task, projectID: projectID, offset: -1) }
+        .accessibilityAction(named: "Move later") { _ = model.moveTask(task, projectID: projectID, offset: 1) }
+    }
+
+    private var insertionIndicator: some View {
+        Rectangle().fill(Mocha.blue).frame(height: 2).padding(.horizontal, 11)
+            .allowsHitTesting(false)
+    }
+
+    private var deadlineDescription: String {
+        guard let deadline = task.deadline else { return "No deadline" }
+        return "\(overdue ? "Overdue" : "Due") · \(deadline.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private var nativeDeadlineActions: TaskDeadlineActions {
+        TaskDeadlineActions(hasDeadline: task.deadline != nil, edit: editDeadline, remove: removeDeadline)
+    }
+
+    @ViewBuilder private var deadlineMenu: some View {
+        Button(task.deadline == nil ? "Set deadline…" : "Edit deadline…", action: editDeadline)
+        if task.deadline != nil { Button("Remove deadline", action: removeDeadline) }
+    }
+
+    private var deadlineEditor: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(deadlineBase?.deadline == nil ? "Set deadline" : "Edit deadline")
+                .font(.system(size: 13, weight: .semibold))
+            DatePicker("Deadline", selection: $deadlineDraft, displayedComponents: [.date, .hourAndMinute])
+                .labelsHidden()
+                .datePickerStyle(.field)
+                .accessibilityLabel("Deadline date and time")
+            Text("Unfinished tasks stay highlighted once overdue.")
+                .font(.system(size: 11)).foregroundStyle(Mocha.secondary)
+            if let deadlineSaveError {
+                Text(deadlineSaveError).font(.system(size: 11)).foregroundStyle(Mocha.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Button("Cancel") { deadlineEditorPresented = false }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") {
+                    guard let deadlineBase else { return }
+                    let date = Date(timeIntervalSince1970: floor(deadlineDraft.timeIntervalSince1970 / 60) * 60)
+                    if model.setDeadline(date, for: deadlineBase, projectID: projectID) {
+                        deadlineEditorPresented = false
+                    } else {
+                        deadlineSaveError = model.errorMessage ?? "Could not save the deadline. Close and reopen to try again."
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14).frame(width: 270)
+        .foregroundStyle(Mocha.text)
+        .preferredColorScheme(.dark)
+    }
+
+    private func editDeadline() {
+        guard model.prepareDeadlineEditing(projectID: projectID) else { return }
+        deadlineBase = task
+        deadlineDraft = task.deadline ?? Date(timeIntervalSince1970: ceil(Date().timeIntervalSince1970 / 3600) * 3600)
+        deadlineSaveError = nil
+        deadlineEditorPresented = true
+    }
+
+    private func removeDeadline() {
+        _ = model.setDeadline(nil, for: task, projectID: projectID)
     }
 
     private func text(_ field: AppModel.EditField, _ fallback: String) -> Binding<String> {

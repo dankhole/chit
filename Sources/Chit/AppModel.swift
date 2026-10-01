@@ -47,6 +47,11 @@ final class AppModel: ObservableObject {
         case group(String?)
     }
 
+    enum TaskDropTarget: Equatable {
+        case before(String)
+        case after(String)
+    }
+
     private struct Draft: Codable {
         let itemID: String
         let field: EditField
@@ -60,6 +65,7 @@ final class AppModel: ObservableObject {
     let store: TodoStore
     /// Private drag scope for this workspace instance; never carries task content.
     let projectDragScope = UUID().uuidString
+    let taskDragScope = UUID().uuidString
     let undoManager = UndoManager()
     @Published private(set) var workspace = Workspace()
     @Published var selectedProjectID = "" { didSet { persistPreferences() } }
@@ -81,6 +87,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var backgroundOpacity = 0.80
     @Published private var drafts: [String: Draft] = [:]
     @Published private var editConflicts: [String: EditConflict] = [:]
+    @Published private var overdueTaskIDs: [String: Set<String>] = [:]
 
     private let preferences: UserDefaults
     private let preferenceKey: String
@@ -88,6 +95,8 @@ final class AppModel: ObservableObject {
     private var autosave: Task<Void, Never>?
     private var watchers: [String: StorePathWatcher] = [:]
     private var observationRefresh: Task<Void, Never>?
+    private var deadlineClock: Task<Void, Never>?
+    private var deadlineSubscriptions: [AnyCancellable] = []
     private var additionalCatalogRecoveryURLs: Set<URL> = []
     private let watchChanges: Bool
     private static let backgroundOpacityKey = "appearance.backgroundOpacity"
@@ -115,8 +124,12 @@ final class AppModel: ObservableObject {
             drafts = Dictionary(restored.map { ($0.key, $0) }, uniquingKeysWith: { _, latest in latest })
         }
         undoManager.levelsOfUndo = 100
+        // Store mutations are complete user actions. Group them explicitly so
+        // flushing an edit and then moving a task remain separate undo steps.
+        undoManager.groupsByEvent = false
         restoringPreferences = false
         refresh()
+        startDeadlineObservationIfNeeded()
         if !drafts.isEmpty { scheduleAutosave() }
     }
 
@@ -127,6 +140,28 @@ final class AppModel: ObservableObject {
 
     func location(for id: String) -> ListLocation? { listLocations[id] }
     func issue(for id: String) -> ListIssue? { listIssues[id] }
+
+    func isOverdue(_ task: TaskItem, projectID: String) -> Bool {
+        isStoreAvailable && listIssues[projectID] == nil && overdueTaskIDs[projectID]?.contains(task.id) == true
+    }
+
+    func hasOverdueTasks(projectID: String) -> Bool {
+        isStoreAvailable && listIssues[projectID] == nil && !(overdueTaskIDs[projectID]?.isEmpty ?? true)
+    }
+
+    /// Refresh only overdue membership, so clock ticks do not disturb native editors.
+    /// An explicit date keeps fixtures deterministic without background observation.
+    func updateDeadlineStatus(at date: Date = Date()) {
+        var next: [String: Set<String>] = [:]
+        if isStoreAvailable {
+            for project in workspace.projects where listIssues[project.id] == nil {
+                let overdue = Set(project.tasks.filter { $0.isOverdue(at: date) }.map(\.id))
+                if !overdue.isEmpty { next[project.id] = overdue }
+            }
+        }
+        if next != overdueTaskIDs { overdueTaskIDs = next }
+        scheduleDeadlineUpdate(at: date)
+    }
 
     func hasRetainedDrafts(listID: String) -> Bool {
         if drafts.values.contains(where: { draft in
@@ -165,8 +200,8 @@ final class AppModel: ObservableObject {
 
     func taskListEntries(projectID: String) -> [TaskListEntry] {
         guard let project = workspace.projects.first(where: { $0.id == projectID }) else { return [] }
-        var entries = project.tasks.filter { !$0.completed }.map(TaskListEntry.task)
-        entries.append(.addTask(projectID: projectID))
+        var entries: [TaskListEntry] = [.addTask(projectID: projectID)]
+        entries.append(contentsOf: project.tasks.filter { !$0.completed }.map(TaskListEntry.task))
         let completed = project.tasks.filter(\.completed)
         if !completed.isEmpty {
             entries.append(.completedHeader(projectID: projectID, count: completed.count))
@@ -377,7 +412,7 @@ final class AppModel: ObservableObject {
 
     func addTask(_ title: String) {
         guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let project = selectedProject else { return }
-        if perform(.addTask(projectID: project.id, task: TaskItem(title: title), index: nil), name: "Add Task", listID: project.id) {
+        if perform(.addTask(projectID: project.id, task: TaskItem(title: title), index: 0), name: "Add Task", listID: project.id) {
             entryDrafts[project.id] = ""
         }
     }
@@ -405,6 +440,23 @@ final class AppModel: ObservableObject {
     func toggleTask(_ task: TaskItem, projectID: String? = nil) {
         guard let owner = projectID ?? self.projectID(for: task.id), let current = taskWithID(task.id, projectID: owner) else { return }
         _ = perform(.patchTask(id: task.id, patch: TaskPatch(completed: FieldChange(expected: current.completed, value: !current.completed))), name: current.completed ? "Reopen Task" : "Complete Task", listID: owner)
+    }
+
+    @discardableResult
+    func prepareDeadlineEditing(projectID: String) -> Bool {
+        guard isStoreAvailable, listIssues[projectID] == nil,
+              workspace.projects.contains(where: { $0.id == projectID }),
+              !hasActiveTextComposition else { return false }
+        return flushTaskInteractionEdits(projectID: projectID)
+    }
+
+    @discardableResult
+    func setDeadline(_ deadline: Date?, for task: TaskItem, projectID: String) -> Bool {
+        guard taskWithID(task.id, projectID: projectID) != nil else { return false }
+        // The menu's snapshot supplies the baseline even after an external refresh.
+        // A deadline edit must not overwrite a value the user has not seen.
+        return perform(.patchTask(id: task.id, patch: TaskPatch(deadline: FieldChange(expected: task.deadline, value: deadline))),
+                       name: deadline == nil ? "Clear Deadline" : "Set Deadline", listID: projectID)
     }
 
     func toggleSubtask(_ subtask: Subtask, projectID: String? = nil) {
@@ -545,6 +597,60 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
+    func moveTask(_ task: TaskItem, projectID: String, to target: TaskDropTarget, expectedOrder: [String]? = nil) -> Bool {
+        guard !hasActiveTextComposition, flushTaskInteractionEdits(projectID: projectID) else { return false }
+        guard let project = workspace.projects.first(where: { $0.id == projectID }),
+              let current = project.tasks.first(where: { $0.id == task.id }),
+              current.completed == task.completed else {
+            errorMessage = "This task was removed or changed sections. Refresh the list and try again."
+            return false
+        }
+        let originalOrder = expectedOrder ?? project.tasks.filter { $0.completed == task.completed }.map(\.id)
+        let targetID: String
+        switch target {
+        case .before(let id), .after(let id): targetID = id
+        }
+        guard originalOrder.contains(task.id),
+              let destination = project.tasks.first(where: { $0.id == targetID }),
+              destination.completed == task.completed,
+              originalOrder.contains(targetID) else {
+            errorMessage = "Tasks can only be reordered within the same list and completion section."
+            return false
+        }
+        var order = originalOrder.filter { $0 != task.id }
+        if targetID == task.id { order = originalOrder }
+        else if let index = order.firstIndex(of: targetID) {
+            order.insert(task.id, at: index + (target == .after(targetID) ? 1 : 0))
+        }
+        return perform(.reorderTasks(projectID: projectID, completed: task.completed,
+            change: FieldChange(expected: originalOrder, value: order)), name: "Move Task", listID: projectID)
+    }
+
+    func canStartTaskDrag(projectID: String) -> Bool {
+        isStoreAvailable && issue(for: projectID) == nil && selectedProjectID == projectID && !hasActiveTextComposition
+    }
+
+    func canMoveTask(_ task: TaskItem, projectID: String, offset: Int) -> Bool {
+        adjacentTaskTarget(task, projectID: projectID, offset: offset) != nil
+    }
+
+    private func adjacentTaskTarget(_ task: TaskItem, projectID: String, offset: Int) -> TaskDropTarget? {
+        guard offset == -1 || offset == 1,
+              let project = workspace.projects.first(where: { $0.id == projectID }) else { return nil }
+        let siblings = project.tasks.filter { $0.completed == task.completed }
+        guard let index = siblings.firstIndex(where: { $0.id == task.id }),
+              siblings.indices.contains(index + offset) else { return nil }
+        let destination = siblings[index + offset].id
+        return offset < 0 ? .before(destination) : .after(destination)
+    }
+
+    @discardableResult
+    func moveTask(_ task: TaskItem, projectID: String, offset: Int) -> Bool {
+        guard let target = adjacentTaskTarget(task, projectID: projectID, offset: offset) else { return false }
+        return moveTask(task, projectID: projectID, to: target)
+    }
+
+    @discardableResult
     func moveProject(_ project: Project, to target: ProjectDropTarget, expectedOrder: [String]? = nil) -> Bool {
         guard workspace.projects.contains(where: { $0.id == project.id }) else {
             errorMessage = "This list was removed. Refresh the lists and try again."
@@ -654,6 +760,7 @@ final class AppModel: ObservableObject {
             adopt(latest)
         } catch {
             isStoreAvailable = false
+            updateDeadlineStatus()
             autosave?.cancel()
             autosave = nil
             startWatcherIfNeeded()
@@ -864,10 +971,13 @@ final class AppModel: ObservableObject {
 
     private func registerUndo(_ inverse: StoreOperation?, name: String, listID: String?) {
         guard let inverse else { return }
+        let needsGroup = undoManager.groupingLevel == 0
+        if needsGroup { undoManager.beginUndoGrouping() }
         undoManager.registerUndo(withTarget: self) { model in
             _ = model.perform(inverse, name: name, listID: listID)
         }
         undoManager.setActionName(name)
+        if needsGroup { undoManager.endUndoGrouping() }
         objectWillChange.send()
     }
 
@@ -905,6 +1015,7 @@ final class AppModel: ObservableObject {
             expandedCompletedProjectIDs = visibleCompleted
         }
         if workspace != latest { workspace = latest }
+        updateDeadlineStatus()
         if !workspace.projects.contains(where: { $0.id == selectedProjectID }) {
             selectedProjectID = workspace.projects.first?.id ?? ""
         }
@@ -1054,6 +1165,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func startDeadlineObservationIfNeeded() {
+        guard watchChanges else { return }
+        let notifications = [
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification),
+            NotificationCenter.default.publisher(for: .NSSystemClockDidChange),
+            NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+        ]
+        deadlineSubscriptions = notifications.map { publisher in
+            publisher.sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.updateDeadlineStatus() }
+            }
+        }
+    }
+
+    private func scheduleDeadlineUpdate(at date: Date) {
+        deadlineClock?.cancel()
+        deadlineClock = nil
+        guard watchChanges, isStoreAvailable else { return }
+        let deadlines = workspace.projects.filter { listIssues[$0.id] == nil }
+            .flatMap(\.tasks).filter { !$0.completed }.compactMap(\.deadline)
+        guard !deadlines.isEmpty else { return }
+        // Wake at the next deadline; the bounded fallback also corrects wall-clock
+        // changes when a notification is missed or the app stays hidden.
+        let nextDeadline = deadlines.filter { $0 >= date }.min()
+        let interval = min(30, max(0.01, (nextDeadline?.timeIntervalSince(date) ?? 30) + 0.01))
+        deadlineClock = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            self?.updateDeadlineStatus()
+        }
+    }
+
     private func scheduleObservationRefresh() {
         observationRefresh?.cancel()
         observationRefresh = Task { @MainActor [weak self] in
@@ -1062,6 +1206,8 @@ final class AppModel: ObservableObject {
             self?.refresh()
         }
     }
+
+    deinit { deadlineClock?.cancel() }
 }
 
 private final class StorePathWatcher: @unchecked Sendable {

@@ -6,7 +6,7 @@ struct ShortcutValue {
     let modifiers: UInt32
     let label: String
 
-    static let standard = ShortcutValue(keyCode: 49, modifiers: UInt32(controlKey | optionKey), label: "⌃⌥Space")
+    static let standard = ShortcutValue(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(optionKey), label: "⌥W")
 }
 
 /// Carbon hot keys are system-wide without monitoring keystrokes or requesting Accessibility access.

@@ -3,6 +3,12 @@ import SwiftUI
 
 enum TitleClickDisposition { case editOnly, toggleDetails, reject }
 
+struct TaskDeadlineActions {
+    let hasDeadline: Bool
+    let edit: () -> Void
+    let remove: () -> Void
+}
+
 /// A plain NSTextView keeps native composition, selection, clipboard and text Undo.
 struct NativeTextEditor: NSViewRepresentable {
     @Binding var text: String
@@ -14,6 +20,7 @@ struct NativeTextEditor: NSViewRepresentable {
     var submitOnReturn = false
     var links = false
     var compactTrailingNewlines = false
+    var deadlineActions: TaskDeadlineActions? = nil
     var onTitlePointerDown: (() -> TitleClickDisposition)? = nil
     var onTitleSingleClick: (() -> Void)? = nil
     var onTitleFocus: (() -> Bool)? = nil
@@ -91,6 +98,7 @@ struct NativeTextEditor: NSViewRepresentable {
         view.onTitlePointerDown = onTitlePointerDown
         view.onTitleSingleClick = onTitleSingleClick
         view.onTitleFocus = onTitleFocus
+        view.deadlineActions = deadlineActions
         // Formatting is presentation only. The binding and shared store contain strings.
         if !view.hasMarkedText(), let storage = view.textStorage {
             let full = NSRange(location: 0, length: storage.length)
@@ -183,8 +191,34 @@ final class PlainTextView: NSTextView {
     var onTitlePointerDown: (() -> TitleClickDisposition)?
     var onTitleSingleClick: (() -> Void)?
     var onTitleFocus: (() -> Bool)?
+    var deadlineActions: TaskDeadlineActions?
     private var pointerFocus: (eventNumber: Int, timestamp: TimeInterval, disposition: TitleClickDisposition)?
     private var handlingCompositionKey = false
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard let deadlineActions else { return menu }
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let edit = NSMenuItem(title: deadlineActions.hasDeadline ? "Edit deadline…" : "Set deadline…",
+                              action: #selector(editDeadline(_:)), keyEquivalent: "")
+        edit.target = self
+        edit.representedObject = deadlineActions
+        menu.addItem(edit)
+        if deadlineActions.hasDeadline {
+            let remove = NSMenuItem(title: "Remove deadline", action: #selector(removeDeadline(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = deadlineActions
+            menu.addItem(remove)
+        }
+        return menu
+    }
+
+    @objc private func editDeadline(_ sender: Any?) {
+        ((sender as? NSMenuItem)?.representedObject as? TaskDeadlineActions)?.edit()
+    }
+    @objc private func removeDeadline(_ sender: Any?) {
+        ((sender as? NSMenuItem)?.representedObject as? TaskDeadlineActions)?.remove()
+    }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil { pointerFocus = nil }
@@ -237,6 +271,10 @@ final class PlainTextView: NSTextView {
     @objc func redo(_ sender: Any?) { if localUndo.canRedo { localUndo.redo() } }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(editDeadline(_:)) { return (item as? NSMenuItem)?.representedObject is TaskDeadlineActions }
+        if item.action == #selector(removeDeadline(_:)) {
+            return ((item as? NSMenuItem)?.representedObject as? TaskDeadlineActions)?.hasDeadline == true
+        }
         if item.action == #selector(undo(_:)) { return localUndo.canUndo }
         if item.action == #selector(redo(_:)) { return localUndo.canRedo }
         return super.validateUserInterfaceItem(item)

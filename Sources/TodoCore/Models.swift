@@ -31,9 +31,31 @@ public struct TaskItem: Codable, Equatable, Sendable, Identifiable {
     public var title: String
     public var notes: String
     public var completed: Bool
+    public var deadline: Date?
     public var subtasks: [Subtask]
-    public init(id: String = UUID().uuidString, title: String, notes: String = "", completed: Bool = false, subtasks: [Subtask] = []) {
-        self.id = id; self.title = title; self.notes = notes; self.completed = completed; self.subtasks = subtasks
+    public init(id: String = UUID().uuidString, title: String, notes: String = "", completed: Bool = false, deadline: Date? = nil, subtasks: [Subtask] = []) {
+        self.id = id; self.title = title; self.notes = notes; self.completed = completed; self.deadline = deadline; self.subtasks = subtasks
+    }
+
+    public func isOverdue(at date: Date) -> Bool {
+        !completed && deadline.map { $0 < date } == true
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, title, notes, completed, deadline, subtasks }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        notes = try c.decode(String.self, forKey: .notes)
+        completed = try c.decode(Bool.self, forKey: .completed)
+        deadline = try c.decodeDeadline(forKey: .deadline)
+        subtasks = try c.decode([Subtask].self, forKey: .subtasks)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(title, forKey: .title); try c.encode(notes, forKey: .notes)
+        try c.encode(completed, forKey: .completed); try c.encodeDeadline(deadline, forKey: .deadline)
+        try c.encode(subtasks, forKey: .subtasks)
     }
 }
 
@@ -68,8 +90,25 @@ public struct TaskPatch: Codable, Equatable, Sendable {
     public var title: FieldChange<String>?
     public var notes: FieldChange<String>?
     public var completed: FieldChange<Bool>?
-    public init(title: FieldChange<String>? = nil, notes: FieldChange<String>? = nil, completed: FieldChange<Bool>? = nil) {
-        self.title = title; self.notes = notes; self.completed = completed
+    public var deadline: FieldChange<Date?>?
+    public init(title: FieldChange<String>? = nil, notes: FieldChange<String>? = nil, completed: FieldChange<Bool>? = nil, deadline: FieldChange<Date?>? = nil) {
+        self.title = title; self.notes = notes; self.completed = completed; self.deadline = deadline
+    }
+}
+
+extension KeyedDecodingContainer {
+    func decodeDeadline(forKey key: Key) throws -> Date? {
+        guard let timestamp = try decodeIfPresent(String.self, forKey: key) else { return nil }
+        guard let deadline = DeadlineTimestamp.parse(timestamp) else {
+            throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "Deadline must be an ISO 8601 date-time with an explicit timezone.")
+        }
+        return deadline
+    }
+}
+
+extension KeyedEncodingContainer {
+    mutating func encodeDeadline(_ deadline: Date?, forKey key: Key) throws {
+        if let deadline { try encode(DeadlineTimestamp.format(deadline), forKey: key) }
     }
 }
 
@@ -93,6 +132,8 @@ public indirect enum StoreOperation: Codable, Equatable, Sendable {
     /// Inverse of creating a group; refuses to undo another writer's subsequent project assignments.
     case deleteEmptyGroup(id: String, expected: ProjectGroup)
     case addTask(projectID: String, task: TaskItem, index: Int?)
+    /// Reorders one completion section by ID, retaining each task's current content.
+    case reorderTasks(projectID: String, completed: Bool, change: FieldChange<[String]>)
     case patchTask(id: String, patch: TaskPatch)
     case deleteTask(id: String, expected: TaskItem)
     case addSubtask(parentID: String, subtask: Subtask, index: Int?)

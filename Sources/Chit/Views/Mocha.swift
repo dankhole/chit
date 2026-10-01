@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 enum Mocha {
+    static let headerRowHeight: CGFloat = 26
     static let textRowHeight: CGFloat = 28
     // Text and SF Symbol line boxes center differently. Shift the text's
     // actual layout inset while keeping the row's total padding unchanged.
@@ -20,6 +21,8 @@ enum Mocha {
     static let secondary = Color(nsColor: nsSecondary)
     static let blue = Color(nsColor: nsBlue)
     static let selected = Color(nsColor: nsSelection)
+    static let warning = Color(red: 249 / 255, green: 226 / 255, blue: 175 / 255)
+    static let overdueBackground = warning.opacity(0.10)
     static let hover = Color(red: 49 / 255, green: 50 / 255, blue: 68 / 255)
     static let taskStripe = hover.opacity(0.45)
     static let taskStripeFeather: CGFloat = 6
@@ -65,6 +68,15 @@ struct CompletionButton: View {
     }
 }
 
+extension VerticalAlignment {
+    /// Header actions share the first tab row's center even when tabs wrap.
+    static let projectHeaderCenter = VerticalAlignment(ProjectHeaderCenter.self)
+
+    private enum ProjectHeaderCenter: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[VerticalAlignment.center] }
+    }
+}
+
 /// Named tabs keep their natural widths and wrap instead of truncating.
 struct WrappingStrip: Layout {
     var spacing: CGFloat = 3
@@ -79,19 +91,36 @@ struct WrappingStrip: Layout {
             subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: ProposedViewSize(width: result.widths[index], height: nil))
         }
     }
-    private func arrange(width: CGFloat, subviews: Subviews) -> (size: CGSize, points: [CGPoint], widths: [CGFloat]) {
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
+        guard guide == .projectHeaderCenter else { return nil }
+        return bounds.minY + arrange(width: bounds.width, subviews: subviews).firstRowHeight / 2
+    }
+    private func arrange(width: CGFloat, subviews: Subviews) -> (size: CGSize, points: [CGPoint], widths: [CGFloat], firstRowHeight: CGFloat) {
         let available = max(24, width)
-        var points: [CGPoint] = [], widths: [CGFloat] = []
+        var points: [CGPoint] = [], widths: [CGFloat] = [], heights: [CGFloat] = []
         var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        var rowStart = 0
+        var firstRowHeight: CGFloat?
+        func centerRow() {
+            for index in rowStart..<points.count {
+                points[index].y += (rowHeight - heights[index]) / 2
+            }
+        }
         for subview in subviews {
             let ideal = subview.sizeThatFits(.unspecified)
             let itemWidth = min(ideal.width, available)
             let size = subview.sizeThatFits(ProposedViewSize(width: itemWidth, height: nil))
-            if x > 0 && x + itemWidth > available { x = 0; y += rowHeight + spacing; rowHeight = 0 }
-            points.append(CGPoint(x: x, y: y)); widths.append(itemWidth)
+            if x > 0 && x + itemWidth > available {
+                centerRow()
+                if firstRowHeight == nil { firstRowHeight = rowHeight }
+                rowStart = points.count
+                x = 0; y += rowHeight + spacing; rowHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y)); widths.append(itemWidth); heights.append(size.height)
             x += itemWidth + spacing
             rowHeight = max(rowHeight, size.height)
         }
-        return (CGSize(width: available, height: y + rowHeight), points, widths)
+        centerRow()
+        return (CGSize(width: available, height: y + rowHeight), points, widths, firstRowHeight ?? rowHeight)
     }
 }

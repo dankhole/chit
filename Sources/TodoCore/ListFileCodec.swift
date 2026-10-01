@@ -1,6 +1,72 @@
 import Foundation
 import CChitYAML
 
+/// Shared CLI, JSON and YAML format. Dates are canonicalized to UTC without
+/// dropping the subsecond precision used by expected-value edits and Undo.
+public enum DeadlineTimestamp {
+    private static let expression = try? NSRegularExpression(pattern:
+        #"^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]+))?(Z|[+-][0-9]{2}:[0-9]{2})$"#)
+
+    public static func parse(_ timestamp: String) -> Date? {
+        guard let match = expression?.firstMatch(in: timestamp, range: NSRange(timestamp.startIndex..., in: timestamp)),
+              match.range.length == timestamp.utf16.count else { return nil }
+        func field(_ index: Int) -> String? {
+            Range(match.range(at: index), in: timestamp).map { String(timestamp[$0]) }
+        }
+        guard let year = field(1).flatMap(Int.init), year > 0,
+              let month = field(2).flatMap(Int.init), let day = field(3).flatMap(Int.init),
+              let hour = field(4).flatMap(Int.init), let minute = field(5).flatMap(Int.init),
+              let second = field(6).flatMap(Int.init), hour < 24, minute < 60, second < 60,
+              let zone = field(8) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let components = DateComponents(era: 1, year: year, month: month, day: day, hour: hour, minute: minute, second: second)
+        guard let local = calendar.date(from: components) else { return nil }
+        let actual = calendar.dateComponents([.era, .year, .month, .day, .hour, .minute, .second], from: local)
+        guard actual.era == 1, actual.year == year, actual.month == month, actual.day == day,
+              actual.hour == hour, actual.minute == minute, actual.second == second else { return nil }
+        var offset = 0
+        if zone != "Z" {
+            let pieces = zone.dropFirst().split(separator: ":")
+            guard let hours = Int(pieces[0]), let minutes = Int(pieces[1]), hours < 24, minutes < 60 else { return nil }
+            offset = (hours * 3600 + minutes * 60) * (zone.first == "-" ? -1 : 1)
+        }
+        guard let fraction = Double("0." + (field(7) ?? "0")), fraction <= 1 else { return nil }
+        // Combine on Date's reference epoch rather than adding to Unix time;
+        // the latter loses precision when translated back to Foundation Date.
+        let date = Date(timeIntervalSinceReferenceDate: local.timeIntervalSinceReferenceDate - Double(offset) + fraction)
+        let utc = calendar.dateComponents([.era, .year], from: date)
+        guard utc.era == 1, let utcYear = utc.year, (1...9999).contains(utcYear) else { return nil }
+        return date
+    }
+
+    public static func format(_ date: Date) throws -> String {
+        let interval = date.timeIntervalSinceReferenceDate
+        guard interval.isFinite, (-1e11...3e11).contains(interval) else {
+            throw ListFileError("Deadline must be a valid date between years 0001 and 9999.")
+        }
+        let wholeSeconds = floor(interval)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let c = calendar.dateComponents([.era, .year, .month, .day, .hour, .minute, .second], from: Date(timeIntervalSinceReferenceDate: wholeSeconds))
+        guard c.era == 1, let year = c.year, (1...9999).contains(year),
+              let month = c.month, let day = c.day, let hour = c.hour, let minute = c.minute, let second = c.second else {
+            throw ListFileError("Deadline must be a valid date between years 0001 and 9999.")
+        }
+        var timestamp = String(format: "%04d-%02d-%02dT%02d:%02d:%02d", year, month, day, hour, minute, second)
+        if interval != wholeSeconds {
+            var fraction = String(format: "%.17f", locale: Locale(identifier: "en_US_POSIX"), interval - wholeSeconds)
+            while fraction.last == "0" { fraction.removeLast() }
+            timestamp += String(fraction.dropFirst())
+        }
+        timestamp += "Z"
+        guard parse(timestamp) == date else {
+            throw ListFileError("The deadline could not be serialized without changing its precision.")
+        }
+        return timestamp
+    }
+}
+
 public struct ListFileError: Error, LocalizedError, Equatable, Sendable {
     public let message: String
     public let line: Int?
@@ -59,6 +125,7 @@ public enum ListFileCodec {
                 lines.append("  - title: \(try string(task.title))")
                 if let id = task.id { lines.append("    id: \(try string(id))") }
                 if task.completed { lines.append("    completed: true") }
+                if let deadline = task.deadline { lines.append("    deadline: \(try DeadlineTimestamp.format(deadline))") }
                 if !task.notes.isEmpty { try notes(task.notes, into: &lines) }
                 if !task.subtasks.isEmpty {
                     lines.append("    subtasks:")
@@ -209,14 +276,15 @@ private struct Schema {
         return ListDocument(version: number, id: id, name: name, tasks: try tasks.enumerated().map { try task($0.element, path: "tasks[\($0.offset)]") })
     }
     mutating func task(_ node: YAMLNode, path: String) throws -> ListTask {
-        let m = try mapping(node, allowed: ["id", "title", "notes", "completed", "subtasks"], path: path)
+        let m = try mapping(node, allowed: ["id", "title", "notes", "completed", "deadline", "subtasks"], path: path)
         let id = try identity(m["id"], path: path + ".id")
         let title = try text(required("title", m, node, path), path: path + ".title")
         let notes = try m["notes"].map { try text($0, path: path + ".notes") } ?? ""
         let completed = try m["completed"].map { try boolean($0, path: path + ".completed") } ?? false
+        let deadline = try m["deadline"].map { try self.deadline($0, path: path + ".deadline") }
         let children = try m["subtasks"].map { try sequence($0, path: path + ".subtasks") } ?? []
         let subtasks = try children.enumerated().map { try subtask($0.element, path: path + ".subtasks[\($0.offset)]") }
-        return ListTask(id: id, title: title, notes: notes, completed: completed, subtasks: subtasks)
+        return ListTask(id: id, title: title, notes: notes, completed: completed, deadline: deadline, subtasks: subtasks)
     }
     mutating func subtask(_ node: YAMLNode, path: String) throws -> ListSubtask {
         let m = try mapping(node, allowed: ["id", "title", "completed"], path: path)
@@ -252,6 +320,13 @@ private struct Schema {
         guard case .scalar(let value, .boolean) = node.value,
               ["true", "True", "TRUE", "false", "False", "FALSE"].contains(value) else { throw node.error("Expected true or false.", path: path) }
         return value.lowercased() == "true"
+    }
+    func deadline(_ node: YAMLNode, path: String) throws -> Date {
+        guard case .scalar(let timestamp, .string) = node.value,
+              let date = DeadlineTimestamp.parse(timestamp) else {
+            throw node.error("Deadline must be an ISO 8601 date-time with an explicit timezone (for example, 2026-10-01T17:00:00-04:00).", path: path)
+        }
+        return date
     }
     func sequence(_ node: YAMLNode, path: String) throws -> [YAMLNode] {
         guard case .sequence(let values) = node.value else { throw node.error("Expected a sequence (use [] for an empty list).", path: path) }

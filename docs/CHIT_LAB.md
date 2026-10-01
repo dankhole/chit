@@ -13,7 +13,9 @@ preview/smoke harnesses with disposable synthetic lists.
 - Compile the Lab profile explicitly. Both executables require a marked Lab
   session directory before opening storage; there is no personal-store fallback.
 - Keep each session's catalog, YAML lists, file-state, and artifacts together.
-  Use a separate Lab preferences domain per session.
+  Run session apps and CLIs from the private temporary session directory so
+  validation does not require access to the checkout's Desktop folder. Use a
+  separate Lab preferences domain per session.
 - Ignore personal store and file-state environment defaults. Restrict storage
   reads and writes, including catalog links and move/recovery paths, to the
   session directory after resolving symbolic links.
@@ -89,11 +91,18 @@ need visible windows instead of silently displaying them. Normal Chit is
 unaffected.
 
 The template builds into `build/lab/template/Chit Lab.app` with its own compiler
-output directory. Each session under `build/lab/runs/` receives a copy with a
-unique bundle ID, a marker, synthetic lists, and an artifacts directory. Rebuild
-the template and create a new session to validate source changes; existing
-sessions retain their earlier binaries and data. All these outputs are ignored
-by Git.
+output directory. New sessions live under the current user's temporary directory
+in `chit-lab-<checkout-hash>/runs/`; the hash identifies the canonical checkout
+path. Each session receives a copy with a unique bundle ID, a marker, synthetic
+lists, and an artifacts directory. `new` prints the exact directory. Session
+apps, data, and artifacts stay outside the checkout so launching a fresh Lab app
+does not request access to the Desktop folder. Rebuild the template and create
+a new session to validate source changes; existing sessions retain their earlier
+binaries and data. Temporary sessions may be removed by macOS cleanup.
+
+Session IDs select the new temporary location. Older `build/lab/runs/` sessions
+remain available by their absolute directory path; they are not moved or deleted.
+Use a new session to avoid Desktop access for those older app copies.
 
 The launcher invokes the exact session bundle or its CLI with `--lab-root`.
 Native check commands retain logs and require the app's explicit JSON success
