@@ -13,6 +13,35 @@ enum ListActions {
 
     static let focusEntry = Notification.Name("ChitFocusListEntry")
 
+    static func copyAgentInstructions(for url: URL, to pasteboard: NSPasteboard = .general) {
+        pasteboard.clearContents()
+        pasteboard.setString(agentInstructions(for: url), forType: .string)
+    }
+
+    static func agentInstructions(for url: URL) -> String {
+        let quotedPath = "'" + url.path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        let command = "chit --file \(quotedPath) read"
+        let longestBacktickRun = command.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
+        let fence = String(repeating: "`", count: max(3, longestBacktickRun + 1))
+        return """
+        ## Chit todos
+
+        Use this exact Chit list for requested persistent todos. Recording a todo does not authorize starting its work. Read the list first and check for duplicates:
+
+        \(fence)sh
+        \(command)
+        \(fence)
+
+        - Use this same explicit `--file` target for every command; do not guess a list or use the catalog default.
+        - Prefer the Chit CLI. Preserve existing IDs, supply expected values when editing, and reread before resolving a conflict.
+        - Keep titles short and specific: an action and its outcome, roughly 4–10 words when useful. Put details, requirements, references, and what counts as done in the parent task's notes.
+        - Add one level of subtasks only for meaningful, independently checkable steps. Subtasks have no notes; keep their context in the parent's notes.
+        - Reread after changes and report what was recorded or updated. Mark work complete only after verifying its outcome.
+        - If the CLI or target file is unavailable, report the problem. Do not silently fall back to another list or create the missing file.
+        - Do not maintain a parallel Markdown todo list.
+        """
+    }
+
     static func createInFolder(model: AppModel, groupID: String? = nil, startingDirectory: URL? = nil) {
         guard canBeginAction() else { return }
         let panel = NSOpenPanel()

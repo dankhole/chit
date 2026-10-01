@@ -1,5 +1,9 @@
 # Local agent command
 
+For choosing a list, writing concise tasks, converting existing todos, and a
+copyable `AGENTS.md` snippet, start with the [agent guide](AGENT_GUIDE.md).
+This page is the command reference.
+
 `build/chit` (also bundled at `build/Chit.app/Contents/Resources/bin/chit`) reads and edits the same YAML list files as the app, including while the app is closed. Build it using `scripts/build.sh`. No server, account, or network connection is needed. `build/todo` and the bundled `todo` remain compatibility commands.
 
 The generated YAML header uses `chit` on your `PATH`. See [README.md](../README.md#install-run-update-or-uninstall) for optional PATH setup using the CLI bundled in your installed app. The explicit `build/chit` paths below also work without that setup. Run repository commands from the repository root; for agent development and validation, use the scoped CLI in [Chit Lab](./CHIT_LAB.md).

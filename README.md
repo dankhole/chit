@@ -44,13 +44,20 @@ For a copy in `~/Applications`, use `$HOME/Applications/Chit.app/Contents/Resour
 - **New List → In Chit** asks for a name and saves the list in app storage. **New List → Choose Folder…** opens a folder browser first, then a native save dialog for the filename, optional Finder tags, and destination. These are movable windows kept on screen, even when Chit sits at the screen edge. The chosen filename supplies the initial list name. Existing files are never silently replaced.
 - **Open List…** opens an existing YAML file in place. A small folder icon identifies lists saved in chosen folders. App-managed lists use plain tab labels.
 - Drag tabs to reorder them or place them in collapsible groups. Grouping changes the local organization, not the files' locations.
-- List menus offer **Show in Finder**, **Copy File Path**, and **Move File…**. **Hide List** removes its tab but keeps the file; use **Open List…** to bring it back. **Delete List…** asks for confirmation before moving the list file and its tasks to macOS Trash. This also applies to files saved in repositories. Renaming a list does not rename its file. Use **Locate…** when a file has moved outside Chit.
+- List menus offer **Show in Finder**, **Copy File Path**, **Copy Agent Instructions**, and **Move File…**. Copy Agent Instructions copies an `AGENTS.md` blurb with this list's file path and task-writing guidance. **Hide List** removes its tab but keeps the file; use **Open List…** to bring it back. **Delete List…** asks for confirmation before moving the list file and its tasks to macOS Trash. This also applies to files saved in repositories. Renaming a list does not rename its file. Use **Locate…** when a file has moved outside Chit.
 - Click the menu-bar checklist or press **Control-Option-Space** to show or hide the panel. Change the shortcut from the app menu. Close, Command-W, and Escape hide the panel; Command-Q quits. While a file picker is open, Command-W or Escape cancels that picker. Hiding or quitting Chit also cancels its file picker.
 - Right-click the menu-bar checklist → **Settings…** to adjust background opacity from 30–100%. Text and controls remain opaque. Command-comma also opens settings.
 
 The panel has no Dock icon, native shadow, or hard outline. The centered hide button shares a compact header with the tabs. Empty header space moves the panel; edges resize it. Text saves after a short pause. Native text Undo and task/group Undo remain available. Window state, list selection, expanded details, and unfinished drafts stay local to the app.
 
 ## List files and agents
+
+Start with the [agent guide](./docs/AGENT_GUIDE.md) for short, actionable task
+titles, notes and subtasks, converting existing todos, and a copyable
+`AGENTS.md` snippet. You can also use **Copy Agent Instructions** in a list's
+menu to get a snippet with its current path. Update that path if the file moves;
+for a shared repository, use a path relative to its root. This repository's
+task list is `docs/todo.yaml`.
 
 Every list has one authoritative YAML file, including app-managed lists. A new manual task can be as small as:
 
@@ -102,6 +109,7 @@ Use [Chit Lab](./docs/CHIT_LAB.md) for isolated agent builds, snapshots, and nat
 ## Documentation
 
 - [Documentation index](./docs/README.md): current guides and repository layout.
+- [Agent guide](./docs/AGENT_GUIDE.md): task writing, todo conversion, and reusable agent instructions.
 - [CLI reference](./docs/CLI.md): commands, literal text input, and concurrency semantics.
 - [Product design](./docs/DESIGN.md) and [UI styling](./docs/UI_STYLING_GUIDE.md): interface and behavior guidance.
 - [List-file storage and migration](./docs/CUTOVER_PLAN.md): accepted contracts and completed cutover plan.

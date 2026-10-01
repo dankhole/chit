@@ -2,6 +2,7 @@
 
 - [Project README](../README.md): installation and daily use.
 - [Chit Lab](CHIT_LAB.md): isolated agent development and native validation.
+- [Agent guide](AGENT_GUIDE.md): task writing, converting existing todos, and copyable `AGENTS.md` instructions.
 - [CLI](CLI.md): shared list operations for agents.
 - [Product design](DESIGN.md): current interface and behavior.
 - [List-file storage](CUTOVER_PLAN.md): accepted storage contracts, migration, and recovery, retained in the completed cutover plan.

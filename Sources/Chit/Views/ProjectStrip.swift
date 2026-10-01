@@ -192,6 +192,7 @@ struct ProjectStrip: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(location.url.path, forType: .string)
             }
+            Button("Copy Agent Instructions") { ListActions.copyAgentInstructions(for: location.url) }
             Button("Move File…") { ListActions.move(project, model: model) }
                 .disabled(model.issue(for: project.id) != nil)
             if model.issue(for: project.id) != nil {

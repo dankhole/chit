@@ -4,6 +4,13 @@ This is a personal, non-DraftKings project. Do not use DraftKings internal MCPs,
 infrastructure, or conventions unless explicitly requested. For interface changes,
 follow `docs/UI_STYLING_GUIDE.md` and preserve the simple, polished user experience.
 
+## Project todos
+
+Project todos live in `docs/todo.yaml`, relative to the repository root.
+Follow [the agent guide](docs/AGENT_GUIDE.md) for task writing and conversion.
+Use Lab's synthetic lists for development checks; this real task list is not
+a validation fixture.
+
 ## Agent development and native validation
 
 Use **Chit Lab** for agent builds, native previews, and smoke checks. Follow
