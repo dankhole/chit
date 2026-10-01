@@ -1,0 +1,187 @@
+name: Build and release
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'Sources/**'
+      - 'Resources/**'
+      - 'config/**'
+      - 'distribution/**'
+      - 'scripts/*release*'
+      - 'scripts/fetch-sparkle.py'
+      - 'scripts/build-yaml.sh'
+      - 'scripts/direct-test.sh'
+      - 'Vendor/libyaml/**'
+      - 'Tests/Release/**'
+  push:
+    tags: ['v*']
+  # Manual runs validate the development build only. Publishing requires a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Tags share one destination-wide queue, including the cask PR. An older release
+# cannot finish after a newer one and move the stable appcast backwards.
+concurrency:
+  group: chit-release-${{ github.event_name == 'push' && (vars.DISTRIBUTION_REPOSITORY || github.repository) || github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  development:
+    name: Universal development build (unpublished)
+    if: github.event_name != 'push'
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Build without release credentials
+        env:
+          VALIDATION_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 -m unittest discover -s Tests/Release -v
+          env -u CHIT_FILE_STATE_DIRECTORY \
+            CHIT_TEST_FILTER='ChitTests.SoftwareUpdateControllerTests' scripts/direct-test.sh ChitTests
+          # RFC 8032's public test fixture avoids accessing release secrets in PR
+          # builds. The builder marks the receipt signed:false/notarized:false.
+          scripts/release-build.sh --version 1.0.1 \
+            --feed-url "https://github.com/$VALIDATION_REPOSITORY/releases/latest/download/appcast.xml" \
+            --public-ed-key 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo= --ad-hoc
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          receipt = json.loads(Path('build/release/build.json').read_text())
+          assert receipt['signed'] is False and receipt['notarized'] is False
+          assert receipt['architectures'] == ['arm64', 'x86_64']
+          PY
+          ditto -c -k --sequesterRsrc --keepParent build/release/Chit.app build/release/Chit-development.zip
+      - name: Retain development artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: Chit-development-${{ github.run_id }}
+          path: |
+            build/release/Chit-development.zip
+            build/release/build.json
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Sign, notarize, and publish stable release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      DISTRIBUTION_REPOSITORY: ${{ vars.DISTRIBUTION_REPOSITORY || github.repository }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+    outputs:
+      version: ${{ steps.configuration.outputs.version }}
+      repository: ${{ steps.configuration.outputs.repository }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Validate tag and required configuration
+        id: configuration
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          HAS_DISTRIBUTION_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN != '' }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, re, sys
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+              sys.exit('Release tag must be vMAJOR.MINOR.PATCH without leading zeroes or prerelease suffixes.')
+          repository = os.environ['DISTRIBUTION_REPOSITORY']
+          if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', repository):
+              sys.exit('DISTRIBUTION_REPOSITORY must be owner/name on github.com.')
+          names = ['SPARKLE_PUBLIC_KEY', 'APPLE_TEAM_ID', 'APPLE_DEVELOPER_ID_CERTIFICATE_P12',
+                   'APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD', 'APPLE_NOTARY_KEY_P8',
+                   'APPLE_NOTARY_KEY_ID', 'APPLE_NOTARY_ISSUER_ID', 'SPARKLE_PRIVATE_KEY']
+          missing = [name for name in names if not os.environ.get(name)]
+          if repository.lower() != os.environ['SOURCE_REPOSITORY'].lower() and os.environ['HAS_DISTRIBUTION_TOKEN'] != 'true':
+              missing.append('DISTRIBUTION_TOKEN (separate public destination)')
+          if missing:
+              sys.exit('Missing release secrets/variables: ' + ', '.join(missing) + '. Values were not printed.')
+          try:
+              public = base64.b64decode(os.environ['SPARKLE_PUBLIC_KEY'], validate=True)
+              secret = base64.b64decode(os.environ['SPARKLE_PRIVATE_KEY'].strip(), validate=True)
+              assert len(public) == 32 and len(secret) in (32, 64, 96)
+              if len(secret) != 32:
+                  assert secret[-32:] == public
+          except (ValueError, AssertionError):
+              sys.exit('Sparkle public/private key configuration is invalid or mismatched (values withheld).')
+          if not re.fullmatch(r'[A-Z0-9]{10}', os.environ['APPLE_TEAM_ID']):
+              sys.exit('APPLE_TEAM_ID must be a ten-character team identifier.')
+          feed = f'https://github.com/{repository}/releases/latest/download/appcast.xml'
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write(f'version={tag[1:]}\nrepository={repository}\nfeed={feed}\n')
+          PY
+      - name: Verify public destination and increasing version
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN || github.token }}
+          RELEASE_VERSION: ${{ steps.configuration.outputs.version }}
+        run: |
+          python3 scripts/release-publish.py preflight \
+            --repository "$DISTRIBUTION_REPOSITORY" --version "$RELEASE_VERSION"
+      - name: Build, notarize, staple, and sign exact update archive
+        env:
+          RELEASE_VERSION: ${{ steps.configuration.outputs.version }}
+          RELEASE_FEED: ${{ steps.configuration.outputs.feed }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_P12 }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: scripts/release-signing.sh "$RELEASE_VERSION" "$RELEASE_FEED" "$SPARKLE_PUBLIC_KEY"
+      - name: Upload to draft, verify all assets, and publish as latest
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN || github.token }}
+          RELEASE_VERSION: ${{ steps.configuration.outputs.version }}
+        run: |
+          python3 scripts/release-publish.py publish \
+            --repository "$DISTRIBUTION_REPOSITORY" --version "$RELEASE_VERSION"
+
+  homebrew:
+    name: Open public tap cask pull request
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out release tooling
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Open cask PR from published asset
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_TOKEN || github.token }}
+          DISTRIBUTION_REPOSITORY: ${{ needs.release.outputs.repository }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          # This job may be retried independently after publication. It never
+          # republishes the release, updates existing assets, or merges the PR.
+          python3 scripts/release-publish.py tap-pr \
+            --repository "$DISTRIBUTION_REPOSITORY" --version "$RELEASE_VERSION"

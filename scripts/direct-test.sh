@@ -21,9 +21,9 @@ while IFS= read -r -d '' source; do CORE_SOURCES+=("$source"); done < <(find "$R
 xcrun swiftc "${COMMON[@]}" -parse-as-library -emit-library -emit-module -module-name TodoCore -emit-module-path "$OUT/TodoCore.swiftmodule" "${CORE_SOURCES[@]}" -lChitYAML -o "$OUT/libTodoCore.dylib"
 SUITES=(TodoCoreTests ChitTests)
 if [[ $# -gt 0 ]]; then SUITES=("$@"); fi
-# A test-only module exposes AppModel only when its suite is requested.
+# A test-only module exposes the model and update policy when their suite is requested.
 if [[ " ${SUITES[*]} " == *" ChitTests "* ]]; then
-xcrun swiftc "${COMMON[@]}" -parse-as-library -emit-library -emit-module -module-name Chit -emit-module-path "$OUT/Chit.swiftmodule" -lTodoCore "$ROOT/Sources/Chit/AppModel.swift" -o "$OUT/libChit.dylib"
+xcrun swiftc "${COMMON[@]}" -parse-as-library -emit-library -emit-module -module-name Chit -emit-module-path "$OUT/Chit.swiftmodule" -lTodoCore "$ROOT/Sources/Chit/AppModel.swift" "$ROOT/Sources/Chit/Updates/SoftwareUpdateController.swift" -o "$OUT/libChit.dylib"
 fi
 for SUITE in "${SUITES[@]}"; do
     case "$SUITE" in TodoCoreTests|ChitTests) ;; *) printf 'Unknown test suite: %s\n' "$SUITE" >&2; exit 2 ;; esac

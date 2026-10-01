@@ -4,6 +4,35 @@ A small native Mac task app with a dark Mocha window, background blur, list tabs
 
 The list-file cutover is implemented. Existing app lists migrate to YAML on first launch, retaining the original workspace for recovery. See [storage, migration, and recovery](./docs/STORAGE.md) for current contracts and the [completed cutover plan](./docs/CUTOVER_PLAN.md) for historical scope and evidence.
 
+## Install a release
+
+Release builds target macOS 14 or later on Apple Silicon and Intel Macs. They
+include the CLI and in-app updates through Sparkle. Installation requires a
+published signed release; Homebrew also requires its generated cask to be merged.
+See [release setup and download location](./docs/RELEASING.md) before using these
+commands. Local builds remain available below.
+
+Download `Chit-X.Y.Z.zip` from the configured public release repository, unzip it,
+move `Chit.app` into `/Applications` or `~/Applications`, and open that copy. Use
+only one Chit copy at a time. Replace an existing local build with the first
+signed release once; local builds do not include the updater. In a release
+build, right-click the menu-bar icon
+and choose **Check for Updates…** to check for a newer signed release.
+
+The source repository can also act as a Homebrew tap when it is public:
+
+```sh
+brew tap dankhole/chit https://github.com/dankhole/chit.git
+brew install --cask dankhole/chit/chit
+```
+
+For a separate public distribution repository, keep the `dankhole/chit` tap name
+and change its URL as described in [the release guide](./docs/RELEASING.md#homebrew).
+The cask marks Chit as updating itself, so ordinary `brew outdated` skips it. To choose
+Homebrew-managed upgrades, quit Chit and run `brew update`, then
+`brew upgrade --cask --greedy dankhole/chit/chit`.
+[Homebrew documents this behavior](https://docs.brew.sh/Manpage).
+
 ## Build and open
 
 For agent validation, start with [Chit Lab](./docs/CHIT_LAB.md). The commands in
@@ -18,18 +47,18 @@ scripts/launch.sh
 
 Outputs are `build/Chit.app` and `build/chit`. The command is also bundled at `build/Chit.app/Contents/Resources/bin/chit`; compatibility copies remain at `build/todo` and `build/Chit.app/Contents/MacOS/todo`.
 
-On this Mac, missing Xcode CoreSimulator components prevent the normal `xcodebuild` route. The scripts detect that and use the installed Swift compiler. Set `CHIT_DIRECT_BUILD=1` to skip the Xcode probe; legacy `TOT_TODO_DIRECT_BUILD=1` also works. The project and scheme are `Chit.xcodeproj` and `Chit`. The app is ad-hoc signed; public distribution/notarization is outside this version. The normal Xcode route still needs verification on a complete Xcode installation.
+On this Mac, missing Xcode CoreSimulator components prevent the normal `xcodebuild` route. The scripts detect that and use the installed Swift compiler. Set `CHIT_DIRECT_BUILD=1` to skip the Xcode probe; legacy `TOT_TODO_DIRECT_BUILD=1` also works. The project and scheme are `Chit.xcodeproj` and `Chit`. These local builds are ad-hoc signed. The separate [release workflow](./docs/RELEASING.md) produces Developer ID signed and notarized builds with Sparkle. The normal Xcode route still needs verification on a complete Xcode installation.
 
-## Install, run, update, or uninstall
+## Local builds and uninstall
 
 - **Run from the repo:** `scripts/launch.sh`, or open `build/Chit.app`. The launch script builds if the bundle is missing; rebuild explicitly after source changes.
 - **Install:** quit Chit from the menu-bar icon's right-click menu, copy `build/Chit.app` into `/Applications` or `~/Applications`, and open that copy.
-- **Update:** run `CHIT_DIRECT_BUILD=1 scripts/build.sh`, quit the old app, and replace the installed copy. Update any separately copied CLI too. Use only one app copy at a time.
+- **Update a local build:** run `CHIT_DIRECT_BUILD=1 scripts/build.sh`, quit the old app, and replace the installed copy. Update any separately copied CLI too. Use only one app copy at a time.
 - **Uninstall:** choose **Quit Chit** and move the app to Trash. This keeps your list files, recovery files, and preferences. Folder-saved lists remain in their chosen folders.
 
-There is no background service or server. The built app runs without Xcode. The repository folder remains `tot-todo`.
+There is no background service or server. Installed apps run without Xcode. Release builds contact GitHub to check for and download updates; the task data remains local. The repository folder remains `tot-todo`.
 
-To use `chit` from any repository, add the installed app's command directory to your shell's PATH. For a copy in `/Applications`, put this in `~/.zprofile`, then start a new terminal:
+Homebrew links the bundled `chit` command into your shell path. For a manually copied app, add its command directory to your shell's PATH to use `chit` from any repository. For a copy in `/Applications`, put this in `~/.zprofile`, then start a new terminal:
 
 ```sh
 export PATH="/Applications/Chit.app/Contents/Resources/bin:$PATH"
@@ -112,6 +141,7 @@ Use [Chit Lab](./docs/CHIT_LAB.md) for isolated agent builds, snapshots, and nat
 
 ## Documentation
 
+- [Releasing](./docs/RELEASING.md): signed GitHub releases, Sparkle updates, and the Homebrew tap.
 - [Documentation index](./docs/README.md): current guides and repository layout.
 - [Agent guide](./docs/AGENT_GUIDE.md): task writing, todo conversion, and reusable agent instructions.
 - [CLI reference](./docs/CLI.md): commands, literal text input, and concurrency semantics.
