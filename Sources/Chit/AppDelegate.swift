@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var shortcut: GlobalShortcut?
     private var shortcutValue: ShortcutValue?
     private var recorder: ShortcutRecorder?
+    private var softwareUpdates: SoftwareUpdateController?
     private var previousApplication: NSRunningApplication?
     // The retained local.dcole.TotTodo bundle ID preserves the existing preferences domain.
     private var preferences = UserDefaults.standard
@@ -78,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         makePanel()
         if snapshotPath != nil { panel.setContentSize(snapshotSize ?? NSSize(width: 424, height: 350)); clampWindow() }
         if snapshotContainedBackdrop { NativePreview.containBackdrop(in: panel) }
+        configureSoftwareUpdates()
         makeMainMenu()
         if showsInterface {
             makeStatusItem()
@@ -196,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let appMenu = NSMenu(title: applicationName)
         appMenu.addItem(item("Settings…", action: #selector(showSettings), key: ","))
         if !LabEnvironment.isEnabled { appMenu.addItem(item("Global Shortcut…", action: #selector(editShortcut))) }
+        if let updateItem = softwareUpdates?.makeMenuItem() { appMenu.addItem(updateItem) }
         appMenu.addItem(.separator())
         appMenu.addItem(item("Hide \(applicationName)", action: #selector(hideFromMenu), key: "h"))
         appMenu.addItem(item("Quit \(applicationName)", action: #selector(quit), key: "q"))
@@ -242,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             menu.addItem(item(panel.isVisible ? "Hide \(applicationName)" : "Show \(applicationName)", action: #selector(toggleFromMenu)))
             menu.addItem(item("Settings…", action: #selector(showSettings)))
             if !LabEnvironment.isEnabled { menu.addItem(item("Global Shortcut…", action: #selector(editShortcut))) }
+            if let updateItem = softwareUpdates?.makeMenuItem() { menu.addItem(updateItem) }
             menu.addItem(.separator())
             menu.addItem(item("Quit \(applicationName)", action: #selector(quit)))
             statusItem.menu = menu
@@ -367,6 +371,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.shortcut = shortcut
         do { try shortcut.register(shortcutValue) }
         catch { model.errorMessage = "\(error.localizedDescription) Set another shortcut in the Chit menu." }
+    }
+
+    private func configureSoftwareUpdates() {
+        do {
+            softwareUpdates = try SoftwareUpdateController.startIfAllowed(
+                isLab: LabEnvironment.isEnabled,
+                isIsolated: isHarness || isolatedStorePath != nil,
+                shouldRelaunch: { [weak self] in
+                    self?.applicationShouldTerminate(NSApp) == .terminateNow
+                }
+            )
+        } catch {
+            NSLog("Software updates are unavailable: %@ Check the release update configuration.", error.localizedDescription)
+        }
     }
 
     @objc private func editShortcut() {

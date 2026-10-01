@@ -1,0 +1,17 @@
+# Release template: generated chit.rb is published through a Casks/chit.rb PR.
+# Keep this template outside Casks until a real release supplies its checksum.
+cask "chit" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "@DOWNLOAD_URL@"
+  name "Chit"
+  desc "Native task lists stored in YAML files"
+  homepage "https://github.com/@REPOSITORY@"
+
+  auto_updates true
+  depends_on macos: :sonoma
+
+  app "Chit.app"
+  binary "#{appdir}/Chit.app/Contents/Resources/bin/chit"
+end

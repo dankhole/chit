@@ -1,6 +1,7 @@
 # Project documentation
 
 - [Project README](../README.md): installation and daily use.
+- [Releasing](RELEASING.md): distribution setup, signed releases, Sparkle, and Homebrew.
 - [Chit Lab](CHIT_LAB.md): isolated agent development and native validation.
 - [Agent guide](AGENT_GUIDE.md): task writing, converting existing todos, and copyable `AGENTS.md` instructions.
 - [CLI](CLI.md): shared list operations for agents.
@@ -17,7 +18,7 @@ Run commands in these guides from the repository root unless stated otherwise.
 | Path | Purpose |
 | --- | --- |
 | `Sources/`, `Resources/`, `Chit.xcodeproj/` | App, CLI, shared model, and build configuration |
-| `Tests/`, `scripts/` | Automated checks and build/Lab tooling |
+| `Tests/`, `scripts/` | Automated checks and build/Lab/release tooling |
 | `Vendor/libyaml/` | Required offline YAML parser, including its license and provenance |
 | `docs/` | Current guides; keep root `README.md` and `AGENTS.md` as entry points |
 | `docs/archive/` | Ignored local history: research, design studies, and verification evidence |
