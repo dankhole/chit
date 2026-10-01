@@ -14,4 +14,6 @@ cask "chit" do
 
   app "Chit.app"
   binary "#{appdir}/Chit.app/Contents/Resources/bin/chit"
+
+@CAVEATS@
 end

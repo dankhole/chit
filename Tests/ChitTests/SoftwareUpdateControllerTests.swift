@@ -1,9 +1,112 @@
-import Foundation
+import AppKit
 import XCTest
 @testable import Chit
 
+#if CHIT_DISTRIBUTION
+import Sparkle
+#endif
+
 @MainActor
 final class SoftwareUpdateControllerTests: XCTestCase {
+    func testAvailableUpdateRefreshesExistingAndNewMenuItemsWithoutChangingAction() {
+        let reminder = SoftwareUpdateReminder()
+        let target = UpdateMenuTarget()
+        let action = #selector(UpdateMenuTarget.checkForUpdates(_:))
+        let existing = reminder.makeMenuItem(target: target, action: action)
+        XCTAssertEqual(existing.title, "Check for Updates…")
+        XCTAssertNil(existing.toolTip)
+
+        reminder.showUpdate(version: "1.4.0")
+        let newItem = reminder.makeMenuItem(target: target, action: action)
+        XCTAssertTrue(reminder.isUpdateAvailable)
+        XCTAssertEqual(reminder.availableVersion, "1.4.0")
+        for item in [existing, newItem] {
+            XCTAssertEqual(item.title, "Update Available…")
+            XCTAssertTrue(item.toolTip?.contains("1.4.0") == true)
+            XCTAssertTrue(item.target === target)
+            XCTAssertEqual(item.action, action)
+        }
+    }
+
+    func testSessionEndClearsReminderAndMenusAndNotifiesOnlyOnChanges() {
+        let reminder = SoftwareUpdateReminder()
+        let target = UpdateMenuTarget()
+        let item = reminder.makeMenuItem(target: target, action: #selector(UpdateMenuTarget.checkForUpdates(_:)))
+        var versions: [String?] = []
+        reminder.onAvailabilityChange = { versions.append($0) }
+
+        reminder.showUpdate(version: "1.4.0")
+        reminder.showUpdate(version: "1.4.0")
+        reminder.showUpdate(version: "1.4.1")
+        XCTAssertTrue(item.toolTip?.contains("1.4.1") == true)
+        #if CHIT_DISTRIBUTION
+        reminder.standardUserDriverWillFinishUpdateSession()
+        #else
+        reminder.finishSession()
+        #endif
+        reminder.finishSession()
+
+        XCTAssertFalse(reminder.isUpdateAvailable)
+        XCTAssertNil(reminder.availableVersion)
+        XCTAssertEqual(item.title, "Check for Updates…")
+        XCTAssertNil(item.toolTip)
+        XCTAssertEqual(versions, ["1.4.0", "1.4.1", nil])
+        XCTAssertEqual(
+            reminder.makeMenuItem(target: target, action: #selector(UpdateMenuTarget.checkForUpdates(_:))).title,
+            "Check for Updates…"
+        )
+    }
+
+    #if CHIT_DISTRIBUTION
+    func testScheduledRemindersPreserveSparkleAlertsForCriticalUpdates() throws {
+        let reminder = SoftwareUpdateReminder()
+        XCTAssertTrue(reminder.supportsGentleScheduledUpdateReminders)
+        for isCritical in [false, true] {
+            let update = try appcastItem(isCritical: isCritical)
+            XCTAssertEqual(update.isCriticalUpdate, isCritical)
+            for immediateFocus in [false, true] {
+                XCTAssertEqual(reminder.standardUserDriverShouldHandleShowingScheduledUpdate(
+                    update, andInImmediateFocus: immediateFocus
+                ), isCritical)
+            }
+        }
+        XCTAssertFalse(reminder.isUpdateAvailable)
+    }
+
+    func testSparkleUserDriverCallbacksShowAndFinishReminderForScheduledAndManualChecks() throws {
+        let reminder = SoftwareUpdateReminder()
+        let update = try appcastItem()
+        for userInitiated in [false, true] {
+            let archive = NSKeyedArchiver(requiringSecureCoding: true)
+            // Sparkle 2.10's public NSSecureCoding initializer is the available
+            // way to construct this state without starting a real updater.
+            archive.encode(SPUUserUpdateStage.notDownloaded.rawValue, forKey: "SPUUserUpdateStateStage")
+            archive.encode(userInitiated, forKey: "SPUUserUpdateStateUserInitiated")
+            archive.finishEncoding()
+            let decoder = try NSKeyedUnarchiver(forReadingFrom: archive.encodedData)
+            let state = try XCTUnwrap(SPUUserUpdateState(coder: decoder))
+            decoder.finishDecoding()
+            XCTAssertEqual(state.userInitiated, userInitiated)
+
+            reminder.standardUserDriverWillHandleShowingUpdate(userInitiated, forUpdate: update, state: state)
+            XCTAssertEqual(reminder.availableVersion, "1.4.0")
+            reminder.standardUserDriverWillFinishUpdateSession()
+            XCTAssertFalse(reminder.isUpdateAvailable)
+        }
+    }
+
+    private func appcastItem(isCritical: Bool = false) throws -> SUAppcastItem {
+        var item: [String: Any] = [
+            "sparkle:version": "140", "sparkle:shortVersionString": "1.4.0",
+            "enclosure": ["url": "https://updates.example.test/Chit_1.4.0.zip"]
+        ]
+        if isCritical { item["sparkle:criticalUpdate"] = [String: String]() }
+        // The deprecated dictionary initializer remains public and is confined
+        // to synthetic test fixtures; production appcast items come from Sparkle.
+        return try XCTUnwrap(SUAppcastItem(dictionary: item))
+    }
+    #endif
+
     func testIsolatedLaunchesNeverAllowUpdates() {
         XCTAssertTrue(SoftwareUpdateController.allowsUpdates(isLab: false, isIsolated: false, environment: [:]))
         XCTAssertFalse(SoftwareUpdateController.allowsUpdates(isLab: true, isIsolated: false, environment: [:]))
@@ -70,4 +173,9 @@ final class SoftwareUpdateControllerTests: XCTestCase {
         XCTAssertFalse(calledGuard)
     }
     #endif
+}
+
+@MainActor
+private final class UpdateMenuTarget: NSObject {
+    @objc func checkForUpdates(_ sender: Any?) {}
 }

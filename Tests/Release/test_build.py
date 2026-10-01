@@ -40,6 +40,24 @@ def options(**changes):
 
 
 class ReleasePreflightTests(unittest.TestCase):
+    def test_ad_hoc_preflight_does_not_require_an_apple_identity(self):
+        with patch.object(builder, "run") as command:
+            builder.validate_options(options())
+            command.assert_not_called()
+
+    def test_distribution_info_verifies_archives_before_extraction_in_both_signing_modes(self):
+        for identity in (None, CERTIFICATE):
+            with self.subTest(identity=identity):
+                info = builder.distribution_info(options(signing_identity=identity, ad_hoc=identity is None))
+                self.assertIs(info["SUVerifyUpdateBeforeExtraction"], True)
+                self.assertEqual(info["SUPublicEDKey"], PUBLIC_KEY)
+                self.assertEqual(info["SUFeedURL"], FEED)
+                self.assertEqual(info["CFBundleIdentifier"], "local.dcole.TotTodo")
+                self.assertEqual(info["CFBundleVersion"], "1.2.3")
+                self.assertEqual(info["CFBundleShortVersionString"], "1.2.3")
+                self.assertNotIn("SUEnableAutomaticChecks", info)
+                self.assertNotIn("SUAutomaticallyUpdate", info)
+
     def test_invalid_public_inputs_fail_before_build_outputs_or_commands(self):
         invalid = [
             dict(version="v1.2.3"), dict(version="1.2.3-beta.1"), dict(version="01.2.3"),
@@ -79,7 +97,7 @@ class ReleasePreflightTests(unittest.TestCase):
             for identity in (CERTIFICATE.lower(), IDENTITY):
                 builder.validate_options(options(signing_identity=identity, ad_hoc=False))
 
-    def test_production_signature_requires_runtime_timestamp_and_developer_id(self):
+    def test_developer_id_signature_requires_runtime_timestamp_and_authority(self):
         complete = "Authority=Developer ID Application: Test Publisher\nflags=0x10000(runtime)\nTimestamp=Oct 1 2026\nTeamIdentifier=TEST123456\n"
         failures = [complete.replace("Developer ID Application", "Apple Development"),
                     complete.replace("flags=0x10000(runtime)\n", ""),

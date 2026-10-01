@@ -111,7 +111,9 @@ def check_asset(asset, path: Path):
         raise ValueError(f'GitHub asset verification failed for {path.name}; the release remains a draft.')
 
 
-def publish(api: GitHub, version: str, directory: Path):
+def publish(api: GitHub, version: str, directory: Path, *, mode: str):
+    if mode not in ('ad-hoc', 'notarized'):
+        raise ValueError('An explicit ad-hoc or notarized publication mode is required; no fallback is permitted.')
     preflight(api, version)
     archive = directory / f'Chit-{version}.zip'
     assets = [archive, archive.with_suffix('.zip.sha256'), directory / 'metadata/appcast.xml', directory / 'metadata/chit.rb']
@@ -119,17 +121,29 @@ def publish(api: GitHub, version: str, directory: Path):
         if not path.is_file() or path.is_symlink() or not path.stat().st_size:
             raise ValueError(f'Missing or invalid release asset: {path}')
     receipt = json.loads((directory / 'build.json').read_text())
-    if any(receipt.get(field) is not True for field in ('signed', 'notarized', 'stapled')):
-        raise ValueError('Builder/signing receipt is not signed, notarized, and stapled; development artifacts cannot be published.')
+    if any(receipt.get(field) is not True for field in ('release_ready', 'code_signature_verified', 'sparkle_verified')):
+        raise ValueError('Release receipt lacks completed code/archive verification; development artifacts cannot be published.')
+    expected_apple_trust = mode == 'notarized'
+    if receipt.get('signing_mode') != mode or any(receipt.get(field) is not expected_apple_trust for field in ('signed', 'notarized', 'stapled')):
+        raise ValueError('Release receipt does not match the explicitly requested signing mode; no downgrade or fallback is permitted.')
     expected_feed = f'https://github.com/{api.repository}/releases/latest/download/appcast.xml'
     if receipt.get('version') != version or receipt.get('architectures') != ['arm64', 'x86_64'] or receipt.get('feed_url') != expected_feed:
         raise ValueError('Build receipt version, universal architectures, or stable feed differs from this release.')
     checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if receipt.get('archive_sha256') != checksum:
+        raise ValueError('Archive checksum differs from the exact Sparkle-verified archive in the release receipt.')
     if assets[1].read_text() != f'{checksum}  {archive.name}\n':
         raise ValueError('Final archive checksum does not match the checksum asset.')
+    trust_description = (
+        'The application is ad-hoc signed and is not Apple notarized. '
+        'For the first launch, macOS may require approval in System Settings → Privacy & Security → Open Anyway. '
+        'Updates are authenticated by Sparkle EdDSA signatures against the public key embedded in Chit.'
+        if mode == 'ad-hoc' else
+        'The application is Developer ID signed, notarized, and stapled; updates are signed with Sparkle EdDSA.'
+    )
     body = ('Universal macOS application for Apple silicon and Intel. Requires macOS 14 or later.\n\n'
             'Download the ZIP below, extract Chit.app, and move it to Applications. '
-            'The application is Developer ID signed, notarized, and stapled; updates are signed with Sparkle EdDSA.\n\n'
+            + trust_description + '\n\n'
             'The checksum file identifies the exact published ZIP. Homebrew availability follows the cask pull request.')
     release = api.request('/releases', method='POST', data={
         'tag_name': 'v' + version, 'name': 'Chit ' + version,
@@ -165,7 +179,7 @@ def publish(api: GitHub, version: str, directory: Path):
     except Exception:
         print('Release failed. Inspect its draft/assets before retrying; this script never deletes or replaces assets.', file=sys.stderr)
         raise
-    print(f'Published signed release: {published["html_url"]}')
+    print(f'Published {mode} release with Sparkle-verified archive: {published["html_url"]}')
 
 
 def public_asset(api: GitHub, release, name: str) -> bytes:
@@ -250,8 +264,8 @@ def tap_pr(api: GitHub, version: str):
         return
     body = (f'Updates `Casks/chit.rb` to the published Chit {version} ZIP and its verified SHA-256.\n\n'
             f'Release: https://github.com/{api.repository}/releases/tag/v{version}\n\n'
-            'The release workflow verified Developer ID signing, notarization, stapling, '
-            'and the Sparkle signature before publication. Merge after reviewing the version and checksum; '
+            'The release workflow verified code-signature integrity, the exact archive\'s Sparkle signature, '
+            'and its checksum before publication. Merge after reviewing the version, checksum, and first-launch caveat; '
             'this PR makes the version available through the tap.')
     pull = api.request('/pulls', method='POST', data={'title': f'Update Chit cask to {version}', 'head': branch, 'base': default, 'body': body, 'maintainer_can_modify': True})
     print(f'Cask PR created: {pull["html_url"]}')
@@ -263,14 +277,17 @@ def main():
     parser.add_argument('--repository', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--directory', type=Path, default=Path('build/release'))
+    parser.add_argument('--mode', choices=('ad-hoc', 'notarized'), help='Required for publish; must match the completed release receipt')
     args = parser.parse_args()
+    if args.command == 'publish' and args.mode is None:
+        parser.error('--mode is required for publish; mode is never inferred from credentials or artifacts')
     try:
         api = GitHub(args.repository)
         if args.command == 'preflight':
             preflight(api, args.version)
             print('Public distribution destination and strictly increasing stable version verified.')
         elif args.command == 'publish':
-            publish(api, args.version, args.directory)
+            publish(api, args.version, args.directory, mode=args.mode)
         else:
             tap_pr(api, args.version)
     except (ValueError, RuntimeError, KeyError, OSError, urllib.error.URLError) as error:

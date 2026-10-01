@@ -8,21 +8,29 @@ The list-file cutover is implemented. Existing app lists migrate to YAML on firs
 
 Release builds target macOS 14 or later on Apple Silicon and Intel Macs. They
 include the CLI and in-app updates through Sparkle. Installation requires a
-published signed release; Homebrew also requires its generated cask to be merged.
-Signed releases await Apple Developer Program enrollment, a Developer ID
-Application certificate, and notarization credentials. See
-[release setup](./docs/RELEASING.md#one-time-setup) for the remaining steps.
-Local builds remain available below.
+published release; Homebrew also requires its generated cask to be merged.
+The default release is ad-hoc signed and not Apple-notarized, so Apple Developer
+Program enrollment is not required. Update archives are signed with Chit's
+Ed25519 key and verified by Sparkle. See [release setup](./docs/RELEASING.md)
+for publication details. Local builds remain available below.
 
 Once published, download `Chit-X.Y.Z.zip` from
 [GitHub Releases](https://github.com/dankhole/chit/releases), unzip it,
 move `Chit.app` into `/Applications` or `~/Applications`, and open that copy. Use
-only one Chit copy at a time. Replace an existing local build with the first
-signed release once; local builds do not include the updater. In a release
-build, right-click the menu-bar icon
-and choose **Check for Updates…** to check for a newer signed release.
+only one Chit copy at a time. For an unnotarized release, macOS may block the
+first launch. After trying to open Chit, go to **System Settings → Privacy &
+Security → Open Anyway**, then confirm **Open**, if you trust the download.
+[Apple's opening instructions](https://support.apple.com/en-us/102445).
 
-The chosen Homebrew tap is the same `dankhole/chit` repository. After the first
+Replace an existing local build with the first release once; local builds do
+not include the updater. In a release build, right-click the menu-bar icon and
+choose **Check for Updates…**. When a newer version is available, **Update**
+appears beside the checklist icon and the menu offers **Update Available…**.
+That opens Sparkle's update window to download, install, and relaunch Chit.
+Automatic checks use Sparkle's consent prompt.
+
+Chit's own Homebrew tap is the same `dankhole/chit` repository, separate from
+Homebrew's official cask catalog. After the first
 release and cask PR are ready:
 
 ```sh
@@ -49,7 +57,7 @@ scripts/launch.sh
 
 Outputs are `build/Chit.app` and `build/chit`. The command is also bundled at `build/Chit.app/Contents/Resources/bin/chit`; compatibility copies remain at `build/todo` and `build/Chit.app/Contents/MacOS/todo`.
 
-On this Mac, missing Xcode CoreSimulator components prevent the normal `xcodebuild` route. The scripts detect that and use the installed Swift compiler. Set `CHIT_DIRECT_BUILD=1` to skip the Xcode probe; legacy `TOT_TODO_DIRECT_BUILD=1` also works. The project and scheme are `Chit.xcodeproj` and `Chit`. These local builds are ad-hoc signed. The separate [release workflow](./docs/RELEASING.md) produces Developer ID signed and notarized builds with Sparkle. The normal Xcode route still needs verification on a complete Xcode installation.
+On this Mac, missing Xcode CoreSimulator components prevent the normal `xcodebuild` route. The scripts detect that and use the installed Swift compiler. Set `CHIT_DIRECT_BUILD=1` to skip the Xcode probe; legacy `TOT_TODO_DIRECT_BUILD=1` also works. The project and scheme are `Chit.xcodeproj` and `Chit`. These local builds are ad-hoc signed. The separate [release workflow](./docs/RELEASING.md) adds Sparkle and signs update archives; Developer ID signing and notarization are optional. The normal Xcode route still needs verification on a complete Xcode installation.
 
 ## Local builds and uninstall
 
@@ -143,7 +151,7 @@ Use [Chit Lab](./docs/CHIT_LAB.md) for isolated agent builds, snapshots, and nat
 
 ## Documentation
 
-- [Releasing](./docs/RELEASING.md): signed GitHub releases, Sparkle updates, and the Homebrew tap.
+- [Releasing](./docs/RELEASING.md): GitHub releases, signed Sparkle updates, and the Homebrew tap.
 - [Documentation index](./docs/README.md): current guides and repository layout.
 - [Agent guide](./docs/AGENT_GUIDE.md): task writing, todo conversion, and reusable agent instructions.
 - [CLI reference](./docs/CLI.md): commands, literal text input, and concurrency semantics.

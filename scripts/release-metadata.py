@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate Sparkle and Homebrew metadata from the final signed release archive.
+"""Generate Sparkle and Homebrew metadata from the final release archive.
 
-Run after notarization, stapling, and repacking. Sparkle's sign_update tool owns
+Run after app signing, packaging, and any optional notarization/stapling.
+Sparkle's sign_update tool owns
 archive signing; this script accepts its public EdDSA signature, never a key.
 The appcast intentionally offers one stable, universal, full-archive update.
 """
@@ -21,6 +22,11 @@ import xml.etree.ElementTree as ET
 SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ATOM_NAMESPACE = "http://www.w3.org/2005/Atom"
 CASK_TEMPLATE = Path(__file__).resolve().parent.parent / "distribution/chit.rb.in"
+AD_HOC_CAVEATS = """  caveats <<~EOS
+    Chit is ad hoc signed and is not notarized by Apple.
+    If macOS blocks the first launch and you trust this release, use
+    Open Anyway in System Settings > Privacy & Security after trying to open Chit.
+  EOS"""
 VERSION_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 REPOSITORY_PATTERN = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}"
@@ -68,8 +74,10 @@ def archive_digest(archive, version):
     return digest.hexdigest(), length
 
 
-def generate(version, archive, signature, repository, output_directory, published_at=None):
+def generate(version, archive, signature, repository, output_directory, published_at=None, mode="ad-hoc"):
     """Write appcast.xml and chit.rb, using only validated release values."""
+    if mode not in ("ad-hoc", "notarized"):
+        raise ValueError("mode must be ad-hoc or notarized")
     published = validate_inputs(version, repository, signature, published_at)
     archive = Path(archive)
     checksum, length = archive_digest(archive, version)
@@ -112,6 +120,7 @@ def generate(version, archive, signature, repository, output_directory, publishe
         "@SHA256@": checksum,
         "@DOWNLOAD_URL@": download_url,
         "@REPOSITORY@": repository,
+        "@CAVEATS@": AD_HOC_CAVEATS if mode == "ad-hoc" else "",
     }.items():
         cask = cask.replace(placeholder, value)
 
@@ -127,15 +136,17 @@ def generate(version, archive, signature, repository, output_directory, publishe
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Stable X.Y.Z version, matching both bundle version keys")
-    parser.add_argument("--archive", type=Path, required=True, help="Final notarized/stapled Chit-X.Y.Z.zip")
+    parser.add_argument("--archive", type=Path, required=True, help="Final Chit-X.Y.Z.zip after app signing and packaging")
     parser.add_argument("--signature", required=True, help="Public base64 signature from Sparkle sign_update")
     parser.add_argument("--repository", required=True, help="Public distribution GitHub repository as owner/name")
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--published-at", help="ISO8601 timestamp with timezone; defaults to current UTC time")
+    parser.add_argument("--mode", choices=("ad-hoc", "notarized"), default="ad-hoc",
+                        help="App signing mode; ad-hoc adds a first-launch caveat (default)")
     args = parser.parse_args()
     try:
         paths = generate(args.version, args.archive, args.signature, args.repository,
-                         args.output_directory, args.published_at)
+                         args.output_directory, args.published_at, args.mode)
     except (ValueError, OSError) as error:
         parser.error(str(error))
     for path in paths:

@@ -230,12 +230,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func makeStatusItem() {
         let status = NSStatusBar.system.statusItem(withLength: LabEnvironment.isEnabled ? NSStatusItem.variableLength : NSStatusItem.squareLength)
         status.button?.image = NSImage(systemSymbolName: "checklist", accessibilityDescription: applicationName)
-        if LabEnvironment.isEnabled { status.button?.title = " Lab" }
-        status.button?.toolTip = "\(applicationName) — click to show or hide; right-click for settings"
         status.button?.target = self
         status.button?.action = #selector(statusClicked)
         status.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = status
+        refreshStatusItem()
+    }
+
+    private func refreshStatusItem() {
+        guard let statusItem, let button = statusItem.button else { return }
+        let hasUpdate = softwareUpdates?.reminder.isUpdateAvailable == true
+        statusItem.length = LabEnvironment.isEnabled || hasUpdate ? NSStatusItem.variableLength : NSStatusItem.squareLength
+        button.title = LabEnvironment.isEnabled ? " Lab" : (hasUpdate ? " Update" : "")
+        button.imagePosition = button.title.isEmpty ? .imageOnly : .imageLeading
+        button.setAccessibilityLabel(hasUpdate ? "\(applicationName), update available" : applicationName)
+        button.toolTip = hasUpdate
+            ? "\(applicationName) — update available; click to show or hide; right-click to update"
+            : "\(applicationName) — click to show or hide; right-click for settings"
     }
 
     @objc private func statusClicked() {
@@ -382,6 +393,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self?.applicationShouldTerminate(NSApp) == .terminateNow
                 }
             )
+            softwareUpdates?.reminder.onAvailabilityChange = { [weak self] _ in
+                self?.refreshStatusItem()
+            }
         } catch {
             NSLog("Software updates are unavailable: %@ Check the release update configuration.", error.localizedDescription)
         }
