@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The native close control lives alongside the project tabs in one header.
+/// The native close control lives alongside list navigation in the header.
 @MainActor
 final class PanelChrome: NSView {
     static let height = Mocha.headerRowHeight

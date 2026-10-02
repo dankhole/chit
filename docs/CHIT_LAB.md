@@ -76,6 +76,7 @@ Use the returned session ID or absolute directory in place of `SESSION`:
 python3 scripts/lab.py cli SESSION lists
 python3 scripts/lab.py cli SESSION read --list 'Lab Inbox'
 python3 scripts/lab.py snapshot SESSION --snapshot-size 424x350
+python3 scripts/lab.py snapshot SESSION --snapshot-size 424x350 --snapshot-sidebar
 ```
 
 `build`, `new`, and `cli` do not launch a GUI. Plain `snapshot` stays hidden;

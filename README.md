@@ -1,6 +1,6 @@
 # Chit
 
-A small native Mac task app with a dark Mocha window, background blur, list tabs, collapsible groups, optional notes, and one level of subtasks. Each list lives in a readable YAML file. The app, local CLI, and a text editor work on that same file.
+A small native Mac task app with a dark Mocha window, background blur, a collapsible list sidebar, collapsible groups, optional notes, and one level of subtasks. Each list lives in a readable YAML file. The app, local CLI, and a text editor work on that same file.
 
 The list-file cutover is implemented. Existing app lists migrate to YAML on first launch, retaining the original workspace for recovery. See [storage, migration, and recovery](./docs/STORAGE.md) for current contracts and the [completed cutover plan](./docs/CUTOVER_PLAN.md) for historical scope and evidence.
 
@@ -84,12 +84,13 @@ For a copy in `~/Applications`, use `$HOME/Applications/Chit.app/Contents/Resour
 - Click a task's title or row background to select it for editing. Subsequent single clicks toggle details immediately across the full row width; clicking blank list or header space collapses it and clears selection. The selected task always shows a disclosure control, which toggles details directly. Expanded rows show subtasks above notes. Native double-click and drag text selection remain available. Notes are plain text with clickable links. Return commits titles; Shift-Return inserts a line break. Parent and child completion remain independent.
 - **New List → In Chit** asks for a name and saves the list in app storage. **New List → Choose Folder…** opens a folder browser first, then a native save dialog for the filename, optional Finder tags, and destination. These are movable windows kept on screen, even when Chit sits at the screen edge. The chosen filename supplies the initial list name. Existing files are never silently replaced.
 - **Open List…** opens an existing YAML file in place. A small folder icon identifies lists saved in chosen folders. App-managed lists use plain tab labels.
-- Drag tabs to reorder them or place them in collapsible groups. Grouping changes the local organization, not the files' locations.
+- Use the header's sidebar button or ⌘⌥S to browse lists. In wider windows the sidebar sits beside tasks and has a resizable divider; in compact windows it opens as a drawer that closes after selection.
+- Drag list rows above or below another list to reorder them, or onto a group heading to move them into that group. Grouping changes the local organization, not the files' locations.
 - List menus offer **Show in Finder**, **Copy File Path**, **Copy Agent Instructions**, and **Move File…**. Copy Agent Instructions copies an `AGENTS.md` blurb with this list's file path and task-writing guidance. **Hide List** removes its tab but keeps the file; use **Open List…** to bring it back. **Delete List…** asks for confirmation before moving the list file and its tasks to macOS Trash. This also applies to files saved in repositories. Renaming a list does not rename its file. Use **Locate…** when a file has moved outside Chit.
 - Click the menu-bar checklist or press **Option-W** (the default shortcut) to show or hide the panel. Change the shortcut from the app menu; saved custom shortcuts are preserved. Close, Command-W, and Escape hide the panel; Command-Q quits. While a file picker is open, Command-W or Escape cancels that picker. Hiding or quitting Chit also cancels its file picker.
 - Right-click the menu-bar checklist → **Settings…** to adjust background opacity from 30–100%. Text and controls remain opaque. Command-comma also opens settings.
 
-The panel has no Dock icon, native shadow, or hard outline. The centered hide button shares a compact header with the tabs. Empty header space moves the panel; edges resize it. Text saves after a short pause. Native text Undo and task/group Undo remain available. Window state, list selection, expanded details, and unfinished drafts stay local to the app.
+The panel has no Dock icon, native shadow, or hard outline. The hide button shares a compact header with the sidebar toggle, active list name, and list actions. Empty header space moves the panel; edges resize it. Text saves after a short pause. Native text Undo and task/group Undo remain available. Window state, sidebar preferences, list selection, expanded details, and unfinished drafts stay local to the app.
 
 ## List files and agents
 

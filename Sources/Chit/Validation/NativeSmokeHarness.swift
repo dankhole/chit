@@ -104,23 +104,32 @@ final class NativeSmokeHarness {
             return view
         }
         let selected = model.selectedProjectID
+        let originalSize = panel.contentRect(forFrameRect: panel.frame).size
+        let originalSidebarOpen = model.sidebarDockedOpen
         let group = ProjectGroup(name: "Smoke drop group")
         let anchor = Project(name: "Smoke anchor")
         let source = Project(name: "Smoke draggable")
+        let scrollProjects = (1...12).map { Project(name: "Smoke scroll \($0)") }
+        let fixtureIDs = Set([anchor.id, source.id] + scrollProjects.map(\.id))
         _ = try model.store.apply(.batch([
             .addGroup(group: group, index: nil),
             .addProject(project: anchor, index: nil),
             .addProject(project: source, index: nil)
-        ]))
+        ] + scrollProjects.map { .addProject(project: $0, index: nil) }))
         defer {
             if let latest = try? model.store.load() {
-                let projects = latest.projects.filter { $0.id == anchor.id || $0.id == source.id }
+                let projects = latest.projects.filter { fixtureIDs.contains($0.id) }
                 _ = try? model.store.apply(.batch(projects.map { .deleteProject(id: $0.id, expected: $0) } + [.deleteEmptyGroup(id: group.id, expected: group)]))
             }
             model.refresh()
             model.selectProject(selected)
+            if model.sidebarDockedOpen != originalSidebarOpen { _ = model.toggleSidebar() }
+            panel.setContentSize(originalSize)
         }
         model.refresh()
+        panel.setContentSize(NSSize(width: 760, height: 350))
+        model.updateSidebarLayout(availableWidth: 760)
+        if !model.sidebarDockedOpen { _ = model.toggleSidebar() }
         try await Task.sleep(nanoseconds: 150_000_000)
         let anchorView = try target(.tab(anchor.id))
         guard let state = anchorView.dragState else { throw harnessError("Native project drag state was not connected.") }
@@ -133,13 +142,50 @@ final class NativeSmokeHarness {
             pasteboard.setData(try JSONEncoder().encode(payload), forType: ProjectDragView.pasteboardType)
         }
         try beginDrag()
-        try check(anchorView.performDrop(pasteboard: pasteboard, location: NSPoint(x: 1, y: anchorView.bounds.midY)), "Dropping before a project failed.")
+        func verticalPoint(_ view: ProjectDragView, above: Bool) -> NSPoint {
+            NSPoint(x: view.bounds.midX,
+                    y: above == view.isFlipped ? view.bounds.minY + 1 : view.bounds.maxY - 1)
+        }
+        let upperPoint = verticalPoint(anchorView, above: true)
+        try check(anchorView.updateDrop(pasteboard: pasteboard, location: upperPoint) == .move && state.hoveredTarget == .before(anchor.id),
+                  "The upper sidebar row did not provide insertion feedback.")
+        try check(anchorView.performDrop(pasteboard: pasteboard, location: upperPoint), "Dropping above a project failed.")
         var ids = model.workspace.projects.map(\.id)
-        try check(ids.firstIndex(of: source.id)! + 1 == ids.firstIndex(of: anchor.id)!, "Leading tab drop did not reorder projects.")
+        try check(ids.firstIndex(of: source.id)! + 1 == ids.firstIndex(of: anchor.id)!, "Upper sidebar drop did not reorder projects.")
         try beginDrag()
-        try check(anchorView.performDrop(pasteboard: pasteboard, location: NSPoint(x: anchorView.bounds.width - 1, y: anchorView.bounds.midY)), "Dropping after a project failed.")
+        let lowerPoint = verticalPoint(anchorView, above: false)
+        try check(anchorView.updateDrop(pasteboard: pasteboard, location: lowerPoint) == .move && state.hoveredTarget == .after(anchor.id),
+                  "The lower sidebar row did not provide insertion feedback.")
+        try check(anchorView.performDrop(pasteboard: pasteboard, location: lowerPoint), "Dropping below a project failed.")
         ids = model.workspace.projects.map(\.id)
-        try check(ids.firstIndex(of: anchor.id)! + 1 == ids.firstIndex(of: source.id)!, "Trailing tab drop did not reorder projects.")
+        try check(ids.firstIndex(of: anchor.id)! + 1 == ids.firstIndex(of: source.id)!, "Lower sidebar drop did not reorder projects.")
+        guard let sidebarScroll = anchorView.enclosingScrollView,
+              let root = panel.contentView,
+              let taskEditor = descendants(root).compactMap({ $0 as? PlainTextView }).first,
+              let taskScroll = taskEditor.enclosingScrollView else {
+            throw harnessError("The sidebar and task scroll views were not mounted.")
+        }
+        try check(sidebarScroll !== taskScroll, "Sidebar rows share the task pane's scroll view.")
+        let clip = sidebarScroll.contentView
+        let originalScroll = clip.bounds.origin
+        let originalTaskScroll = taskScroll.contentView.bounds.origin
+        try beginDrag()
+        let bottomEdge = NSPoint(x: clip.bounds.midX,
+                                 y: clip.isFlipped ? clip.bounds.maxY - 2 : clip.bounds.minY + 2)
+        try check(anchorView.autoscrollSidebar(at: clip.convert(bottomEdge, to: nil)) && clip.bounds.origin != originalScroll,
+                  "Dragging at the lower sidebar edge did not scroll overflowing lists.")
+        let afterEdgeScroll = clip.bounds.origin
+        guard let wheelEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                       wheel1: -60, wheel2: 0, wheel3: 0).flatMap({ NSEvent(cgEvent: $0) }) else {
+            throw harnessError("Could not create a native sidebar scroll event.")
+        }
+        anchorView.scrollWheel(with: wheelEvent)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try check(clip.bounds.origin != afterEdgeScroll && taskScroll.contentView.bounds.origin == originalTaskScroll,
+                  "Wheel scrolling over a native sidebar row did not scroll only its own pane.")
+        state.finish()
+        clip.scroll(to: originalScroll)
+        sidebarScroll.reflectScrolledClipView(clip)
         model.toggleGroup(group.id)
         try await Task.sleep(nanoseconds: 100_000_000)
         let groupView = try target(.group(group.id))
@@ -519,9 +565,15 @@ final class NativeSmokeHarness {
                   "First click after blank-space reset expanded task details.")
         title.setSelectedRange(NSRange(location: (title.string as NSString).length, length: 0))
         title.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: title.selectedRange())
+        func titleCompositionState() -> String {
+            "\(clickState()), title=\(title.string.debugDescription), titleMarked=\(title.hasMarkedText()), titleSelection=\(NSStringFromRange(title.selectedRange())), titleEditable=\(title.isEditable), titleSelectable=\(title.isSelectable), titleWindow=\(title.window?.windowNumber ?? -1), panel=\(panel.windowNumber), keyWindow=\(NSApp.keyWindow?.windowNumber ?? -1), selectedProject=\(model.selectedProjectID), sidebarDocked=\(model.sidebarIsDocked), sidebarOpen=\(model.sidebarDockedOpen), drawerOpen=\(model.sidebarDrawerOpen)"
+        }
+        let beforeBlankCompositionClick = titleCompositionState()
+        try check(title.hasMarkedText() && model.selectedTaskIDs[project.id] == task.id && panel.firstResponder === title,
+                  "Could not establish the selected title's native composition before a blank click. \(beforeBlankCompositionClick).")
         try await click(blank)
         try check(title.hasMarkedText() && model.selectedTaskIDs[project.id] == task.id && panel.firstResponder === title,
-                  "Blank-space reset discarded a selected title's native composition.")
+                  "Blank-space reset discarded a selected title's native composition. Before: \(beforeBlankCompositionClick). After: \(titleCompositionState()); \(pointClassification(blank)); delivered: \(deliveredEvents.suffix(6)).")
         title.insertText("あ", replacementRange: NSRange(location: NSNotFound, length: 0))
         try check(model.flushPendingEdits(), "Committing selected-title composition did not save its draft.")
         _ = try model.store.apply(.patchTask(id: task.id, patch: TaskPatch(completed: FieldChange(expected: false, value: true))))
@@ -722,6 +774,18 @@ final class NativeSmokeHarness {
         try check(NSApp.sendAction(Selector(("redo:")), to: nil, from: delegate), "Native responder rejected Redo.")
         try check(editor.string == typed, "Native text Redo did not restore the edit.")
         let originalSize = panel.contentRect(forFrameRect: panel.frame).size
+        let originalSidebarOpen = model.sidebarDockedOpen
+        let originalSidebarWidth = model.sidebarWidth
+        defer {
+            model.dismissSidebarDrawer()
+            model.setSidebarWidth(originalSidebarWidth)
+            if model.sidebarDockedOpen != originalSidebarOpen {
+                model.updateSidebarLayout(availableWidth: 900)
+                _ = model.toggleSidebar()
+            }
+            panel.setContentSize(originalSize)
+            model.updateSidebarLayout(availableWidth: originalSize.width)
+        }
         editor.breakUndoCoalescing()
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
         editor.insertText("\nResize this multiline title while keeping its native editor, selection, and Undo history intact. The following notes must stay below every wrapped line.", replacementRange: editor.selectedRange())
@@ -758,19 +822,102 @@ final class NativeSmokeHarness {
         try check(editor.localUndo.canUndo, "Resizing discarded native Undo history.")
         editor.localUndo.undo()
         try check(editor.string == typed, "Undo after resizing did not restore the native title.")
-        panel.setContentSize(originalSize)
+        editor.setSelectedRange(NSRange(location: 3, length: 4))
+        let sidebarSelection = editor.selectedRange()
+        func checkSidebarEditor(_ phase: String, focused: Bool = true) throws {
+            try check(descendants(root).contains(where: { $0 === editor }) && editor.window === panel &&
+                      editor.selectedRange() == sidebarSelection && (!focused || panel.firstResponder === editor),
+                      "\(phase) replaced the task editor or changed its focus and selection.")
+            try check(editor.localUndo.canUndo, "\(phase) discarded native Undo history.")
+        }
+        panel.setContentSize(NSSize(width: 900, height: 600))
+        model.updateSidebarLayout(availableWidth: 900)
+        if !model.sidebarDockedOpen { _ = model.toggleSidebar() }
         try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
+        let dockedEditorWidth = editor.bounds.width
+        try checkSidebarEditor("Docking the sidebar")
+        try check(model.toggleSidebar() && !model.sidebarDockedOpen, "The docked sidebar did not hide.")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
+        try check(editor.bounds.width > dockedEditorWidth + 150, "Hiding the docked sidebar did not return its space to the task editor.")
+        try checkSidebarEditor("Hiding the docked sidebar")
+        try check(model.toggleSidebar() && model.sidebarDockedOpen, "The docked sidebar did not reopen.")
+        model.setSidebarWidth(320)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
+        try checkSidebarEditor("Reopening and resizing the docked sidebar")
+        model.setSidebarWidth(originalSidebarWidth)
+        panel.setContentSize(NSSize(width: 424, height: 600))
+        model.updateSidebarLayout(availableWidth: 424)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try check(model.showSidebarDrawer() && model.sidebarDrawerOpen, "The narrow sidebar drawer did not open.")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
+        try checkSidebarEditor("Opening the narrow sidebar drawer", focused: false)
+        try check(!editor.isEditable && !editor.isSelectable, "The open sidebar drawer left native task editing enabled behind it.")
+        guard let drawerEscape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+            context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) else {
+            throw harnessError("Could not prepare sidebar drawer Escape event.")
+        }
+        panel.sendEvent(drawerEscape)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try check(!model.sidebarDrawerOpen && editor.isEditable && editor.isSelectable,
+                  "Escape did not dismiss the sidebar drawer and restore task editing.")
+        try checkSidebarEditor("Dismissing the sidebar drawer with Escape")
+        try check(model.showSidebarDrawer(), "The sidebar drawer did not reopen after Escape.")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let outsidePoint = editor.convert(NSPoint(x: editor.bounds.maxX - 4, y: editor.bounds.midY), to: nil)
+        guard let outsideDown = NSEvent.mouseEvent(with: .leftMouseDown, location: outsidePoint, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else {
+            throw harnessError("Could not prepare sidebar drawer outside click.")
+        }
+        panel.sendEvent(outsideDown)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try check(!model.sidebarDrawerOpen, "Clicking outside the narrow sidebar drawer did not dismiss it.")
+        try checkSidebarEditor("Dismissing the sidebar drawer with an outside click")
+        panel.setContentSize(originalSize)
+        model.updateSidebarLayout(availableWidth: originalSize.width)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        func currentPublishedTitle() throws -> String {
+            guard let current = model.selectedProject?.tasks.first(where: { $0.id == taskID }) else {
+                throw harnessError("The native composition task disappeared.")
+            }
+            // Sidebar focus changes can save the draft. AppModel.text returns
+            // this fallback once saved, so it must be the current task title.
+            return model.text(itemID: taskID, field: .title, fallback: current.title,
+                              projectID: model.selectedProjectID)
+        }
+        let beforeComposition = try currentPublishedTitle()
+        try check(beforeComposition == typed && editor.string == typed,
+                  "The native composition baseline changed (expected=\(typed.debugDescription), published=\(beforeComposition.debugDescription), editor=\(editor.string.debugDescription)).")
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
         editor.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: editor.selectedRange())
         try check(editor.hasMarkedText(), "Could not establish native marked composition.")
         let markedSelection = editor.selectedRange()
-        panel.setContentSize(NSSize(width: 600, height: originalSize.height))
+        panel.setContentSize(NSSize(width: 900, height: originalSize.height))
+        model.updateSidebarLayout(availableWidth: 900)
         try await Task.sleep(nanoseconds: 100_000_000)
         panel.contentView?.layoutSubtreeIfNeeded()
         try check(editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor,
-                  "Resizing disrupted native marked composition.")
+                  "Resizing into the docked sidebar layout disrupted native marked composition.")
+        try check(model.toggleSidebar(), "The docked sidebar could not hide during native composition.")
+        try check(model.toggleSidebar(), "The docked sidebar could not reopen during native composition.")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try check(editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor,
+                  "Hiding and showing the docked sidebar disrupted native marked composition.")
         panel.setContentSize(originalSize)
-        try check(model.text(itemID: taskID, field: .title, fallback: title) == typed, "Provisional composition was published prematurely.")
+        model.updateSidebarLayout(availableWidth: originalSize.width)
+        if !model.sidebarIsDocked {
+            try check(!model.showSidebarDrawer() && !model.sidebarDrawerOpen && editor.hasMarkedText() && panel.firstResponder === editor,
+                      "Opening the narrow drawer interrupted native marked composition.")
+        }
+        let publishedDuringComposition = try currentPublishedTitle()
+        let persistedDuringComposition = try model.store.load().projects.flatMap(\.tasks).first(where: { $0.id == taskID })?.title
+        try check(publishedDuringComposition == typed && persistedDuringComposition == typed,
+                  "Provisional composition changed published or persisted text (expected=\(typed.debugDescription), published=\(publishedDuringComposition.debugDescription), persisted=\(String(describing: persistedDuringComposition)), editor=\(editor.string.debugDescription), marked=\(editor.hasMarkedText()), selection=\(editor.selectedRange())).")
         try check(!delegate.hidePanel() && panel.isVisible, "Marked composition did not prevent hide.")
         try check(delegate.applicationShouldTerminate(NSApp) == .terminateCancel, "Marked composition did not prevent normal quit.")
         let compositionSelection = editor.selectedRange()

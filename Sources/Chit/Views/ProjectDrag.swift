@@ -74,6 +74,13 @@ final class ProjectDragView: NSView, NSDraggingSource {
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func scrollWheel(with event: NSEvent) {
+        // The native selection/drag overlay owns row hits. Send wheel events
+        // directly to the sidebar's scroll view rather than swallowing them.
+        if let scrollView = enclosingScrollView { scrollView.scrollWheel(with: event) }
+        else { super.scrollWheel(with: event) }
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         // Leave contextual clicks with the SwiftUI button beneath this overlay.
         if let event = NSApp.currentEvent,
@@ -116,7 +123,16 @@ final class ProjectDragView: NSView, NSDraggingSource {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { updateDrop(sender) }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { updateDrop(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if acceptedPayload(from: sender.draggingPasteboard) != nil {
+            _ = autoscrollSidebar(at: sender.draggingLocation)
+        }
+        return updateDrop(sender)
+    }
+
+    // AppKit continues draggingUpdated calls while the pointer rests at an
+    // edge, allowing the independently scrolling sidebar to keep advancing.
+    override func wantsPeriodicDraggingUpdates() -> Bool { true }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
         if dragState?.hoveredTarget == lastTarget { dragState?.hoveredTarget = nil }
@@ -154,14 +170,43 @@ final class ProjectDragView: NSView, NSDraggingSource {
     }
 
     private func updateDrop(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard acceptedPayload(from: sender.draggingPasteboard) != nil,
-              let target = dropTarget(at: convert(sender.draggingLocation, from: nil)) else {
-            draggingExited(sender)
+        updateDrop(pasteboard: sender.draggingPasteboard, location: convert(sender.draggingLocation, from: nil))
+    }
+
+    @discardableResult
+    func updateDrop(pasteboard: NSPasteboard, location: NSPoint) -> NSDragOperation {
+        guard acceptedPayload(from: pasteboard) != nil,
+              let target = dropTarget(at: location) else {
+            draggingExited(nil)
             return []
         }
         lastTarget = target
         if dragState?.hoveredTarget != target { dragState?.hoveredTarget = target }
         return .move
+    }
+
+    /// Scroll in visual top/bottom directions regardless of the clip view's
+    /// coordinate orientation. The native harness uses the same edge path.
+    @discardableResult
+    func autoscrollSidebar(at windowPoint: NSPoint) -> Bool {
+        guard dragState?.payload != nil, let scrollView = enclosingScrollView else { return false }
+        let clip = scrollView.contentView
+        let point = clip.convert(windowPoint, from: nil)
+        guard clip.bounds.contains(point) else { return false }
+        let topDistance = clip.isFlipped ? point.y - clip.bounds.minY : clip.bounds.maxY - point.y
+        let bottomDistance = clip.isFlipped ? clip.bounds.maxY - point.y : point.y - clip.bounds.minY
+        let edge: CGFloat = 28
+        let visualDelta: CGFloat
+        if topDistance < edge { visualDelta = -max(4, (edge - topDistance) * 0.65) }
+        else if bottomDistance < edge { visualDelta = max(4, (edge - bottomDistance) * 0.65) }
+        else { return false }
+        var proposedBounds = clip.bounds
+        proposedBounds.origin.y += clip.isFlipped ? visualDelta : -visualDelta
+        let constrained = clip.constrainBoundsRect(proposedBounds)
+        guard constrained.origin != clip.bounds.origin else { return false }
+        clip.scroll(to: constrained.origin)
+        scrollView.reflectScrolledClipView(clip)
+        return true
     }
 
     private func dropTarget(at location: NSPoint) -> AppModel.ProjectDropTarget? {
@@ -170,7 +215,10 @@ final class ProjectDragView: NSView, NSDraggingSource {
         case .tab(let projectID):
             guard projectID != dragState?.payload?.projectID,
                   model.workspace.projects.contains(where: { $0.id == projectID }) else { return nil }
-            return location.x < bounds.midX ? .before(projectID) : .after(projectID)
+            // An NSView is normally unflipped even inside SwiftUI. Compare the
+            // visual upper/lower half instead of assuming y grows downwards.
+            let isAbove = isFlipped ? location.y < bounds.midY : location.y > bounds.midY
+            return isAbove ? .before(projectID) : .after(projectID)
         case .group(let groupID):
             guard groupID == nil || model.workspace.groups.contains(where: { $0.id == groupID }) else { return nil }
             return .group(groupID)

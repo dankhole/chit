@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var snapshotCompleted = false
     private var snapshotNewList = false
     private var snapshotRecovery = false
+    private var snapshotSidebar = false
     private var previewBackdrop: NSWindow?
     private var smokeTest = false
     private var filePanelTest = false
@@ -78,6 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         makePanel()
         if snapshotPath != nil { panel.setContentSize(snapshotSize ?? NSSize(width: 424, height: 350)); clampWindow() }
+        if snapshotSidebar {
+            model.updateSidebarLayout(availableWidth: panel.contentView?.bounds.width ?? panel.frame.width)
+            if model.sidebarIsDocked {
+                if !model.sidebarDockedOpen { _ = model.toggleSidebar() }
+            } else { _ = model.showSidebarDrawer() }
+        }
         if snapshotContainedBackdrop { NativePreview.containBackdrop(in: panel) }
         configureSoftwareUpdates()
         makeMainMenu()
@@ -137,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case "--snapshot-completed": snapshotCompleted = true
             case "--snapshot-new-list": snapshotNewList = true
             case "--snapshot-recovery": snapshotRecovery = true
+            case "--snapshot-sidebar": snapshotSidebar = true
             default: break // AppKit and test runners may pass their own launch arguments.
             }
             index += 1
@@ -152,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if (smokeTest || filePanelTest || snapshotPath != nil) && isolatedStorePath == nil {
             throw harnessError("--smoke-test, --file-panel-test and --snapshot require --store with an isolated workspace path.")
         }
-        if (snapshotExpandedTask != nil || snapshotSize != nil || !snapshotCollapsedGroups.isEmpty || snapshotSolid || snapshotContrast || snapshotBackdrop || snapshotCompleted || snapshotNewList || snapshotRecovery) && snapshotPath == nil {
+        if (snapshotExpandedTask != nil || snapshotSize != nil || !snapshotCollapsedGroups.isEmpty || snapshotSolid || snapshotContrast || snapshotBackdrop || snapshotCompleted || snapshotNewList || snapshotRecovery || snapshotSidebar) && snapshotPath == nil {
             throw harnessError("Snapshot layout flags require --snapshot and an isolated --store.")
         }
     }
@@ -218,6 +226,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         edit.submenu = editMenu
         menu.addItem(edit)
+        let view = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        let toggleSidebarItem = item("Toggle Sidebar", action: #selector(toggleSidebar), key: "s")
+        toggleSidebarItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(toggleSidebarItem)
+        view.submenu = viewMenu
+        menu.addItem(view)
         NSApp.mainMenu = menu
     }
 
@@ -292,6 +307,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if panel.isVisible { hidePanel() } else { showPanel() }
     }
     @objc private func hideFromMenu() { hidePanel() }
+    @objc private func toggleSidebar() {
+        guard panel?.attachedSheet == nil, model?.isStoreAvailable == true else { return }
+        _ = model.toggleSidebar()
+    }
     @objc private func closeFromMenu() {
         if FilePanelPresenter.cancelActivePanel() { return }
         hidePanel()

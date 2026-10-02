@@ -11,22 +11,105 @@ struct ContentView: View {
     @State private var recoveryListID = ""
 
     var body: some View {
+        GeometryReader { geometry in
+            let layout = SidebarLayout(availableWidth: geometry.size.width, preferredWidth: model.sidebarWidth,
+                                       dockedOpen: model.sidebarDockedOpen, drawerOpen: model.sidebarDrawerOpen)
+            VStack(spacing: 0) {
+                if displaysCatalogRecovery {
+                    CatalogRecoveryHeader()
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                    Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
+                        .padding(.horizontal, 10)
+                    CatalogRecoveryView(model: model)
+                } else {
+                    ProjectHeader(model: model, sidebarVisible: layout.sidebarVisible, onToggleSidebar: {
+                        _ = model.toggleSidebar()
+                    }, onNewList: presentNewList)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                    Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
+                        .padding(.horizontal, 10)
+                    adaptiveWorkspace(layout: layout)
+                }
+            }
+            .onAppear { model.updateSidebarLayout(availableWidth: geometry.size.width) }
+            .onChange(of: geometry.size.width) { _, width in model.updateSidebarLayout(availableWidth: width) }
+        }
+        .foregroundStyle(Mocha.text)
+        .tint(Mocha.blue)
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 300, minHeight: 180)
+        .onReceive(NotificationCenter.default.publisher(for: NSText.didChangeNotification)) { _ in
+            compositionInProgress = selectedEditorHasMarkedText
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSText.didEndEditingNotification)) { _ in
+            compositionInProgress = selectedEditorHasMarkedText
+        }
+        .onReceive(NotificationCenter.default.publisher(for: HeaderDragView.blankClick)) { _ in
+            guard !model.sidebarDrawerOpen else { return }
+            _ = model.clearTaskSelection()
+        }
+        .sheet(isPresented: $newListPresented) {
+            NewListForm(model: model, groupID: newListGroupID) { newListPresented = false }
+        }
+        .onChange(of: model.errorMessage, initial: true) { _, _ in refreshRecoveryBackups() }
+        .onChange(of: model.selectedProjectID) { _, _ in
+            // Creating or opening a list also selects it; reveal its tasks just
+            // as a selection from a drawer row does.
+            model.dismissSidebarDrawer()
+            refreshRecoveryBackups()
+        }
+        .onChange(of: model.selectedListIssue) { _, _ in refreshRecoveryBackups() }
+        .onChange(of: model.isStoreAvailable) { _, _ in refreshRecoveryBackups() }
+    }
+
+    private func presentNewList(_ groupID: String?) {
+        newListGroupID = groupID
+        newListPresented = true
+    }
+
+    private func adaptiveWorkspace(layout: SidebarLayout) -> some View {
+        ZStack(alignment: .leading) {
+            // This subtree stays at the same identity and parent in every
+            // sidebar mode. Only its available width changes; native text
+            // editors, their composition, selection and Undo remain alive.
+            taskWorkspace
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.leading, layout.taskInset)
+                .disabled(layout.drawerVisible)
+                .environment(\.sidebarBlocksTextInput, layout.drawerVisible)
+                .allowsHitTesting(!layout.drawerVisible)
+                .accessibilityHidden(layout.drawerVisible)
+                .accessibilityIdentifier("task-workspace")
+            Color.black.opacity(layout.drawerVisible ? 0.18 : 0)
+                .allowsHitTesting(layout.drawerVisible)
+                .onTapGesture { model.dismissSidebarDrawer() }
+                .accessibilityHidden(true)
+            ProjectSidebar(model: model, onNewList: presentNewList, onSelect: model.dismissSidebarDrawer)
+                .frame(width: layout.sidebarWidth)
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+                .background(Color(red: 30 / 255, green: 30 / 255, blue: 46 / 255)
+                    .opacity(layout.isDocked ? 0.25 : 1))
+                .background(SidebarModalBoundary(model: model, active: layout.drawerVisible))
+                .opacity(layout.sidebarVisible ? 1 : 0)
+                .allowsHitTesting(layout.sidebarVisible)
+                .disabled(!layout.sidebarVisible)
+                .accessibilityHidden(!layout.sidebarVisible)
+                .accessibilityIdentifier("list-sidebar")
+            SidebarResizeDivider(model: model, availableWidth: layout.availableWidth,
+                                 actualWidth: layout.sidebarWidth)
+                .frame(width: SidebarLayout.dividerWidth)
+                .frame(maxHeight: .infinity)
+                .offset(x: layout.sidebarWidth)
+                .opacity(layout.isDocked && layout.sidebarVisible ? 1 : 0)
+                .allowsHitTesting(layout.isDocked && layout.sidebarVisible)
+                .accessibilityHidden(!layout.isDocked || !layout.sidebarVisible)
+        }
+        .clipped()
+    }
+
+    private var taskWorkspace: some View {
         VStack(spacing: 0) {
-            if displaysCatalogRecovery {
-                CatalogRecoveryHeader()
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
-                    .padding(.horizontal, 10)
-                CatalogRecoveryView(model: model)
-            } else {
-            ProjectStrip(model: model, onNewList: { groupID in
-                newListGroupID = groupID
-                newListPresented = true
-            })
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-            Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
-                .padding(.horizontal, 10)
             CatalogRecoveryNoticeView(model: model)
             if let error = model.errorMessage {
                 VStack(alignment: .leading, spacing: 5) {
@@ -119,28 +202,7 @@ struct ContentView: View {
             } else {
                 CatalogRecoveryView(model: model)
             }
-            }
         }
-        .foregroundStyle(Mocha.text)
-        .tint(Mocha.blue)
-        .preferredColorScheme(.dark)
-        .frame(minWidth: 300, minHeight: 180)
-        .onReceive(NotificationCenter.default.publisher(for: NSText.didChangeNotification)) { _ in
-            compositionInProgress = selectedEditorHasMarkedText
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSText.didEndEditingNotification)) { _ in
-            compositionInProgress = selectedEditorHasMarkedText
-        }
-        .onReceive(NotificationCenter.default.publisher(for: HeaderDragView.blankClick)) { _ in
-            _ = model.clearTaskSelection()
-        }
-        .sheet(isPresented: $newListPresented) {
-            NewListForm(model: model, groupID: newListGroupID) { newListPresented = false }
-        }
-        .onChange(of: model.errorMessage, initial: true) { _, _ in refreshRecoveryBackups() }
-        .onChange(of: model.selectedProjectID) { _, _ in refreshRecoveryBackups() }
-        .onChange(of: model.selectedListIssue) { _, _ in refreshRecoveryBackups() }
-        .onChange(of: model.isStoreAvailable) { _, _ in refreshRecoveryBackups() }
     }
 
     private var recoveryMenu: some View {

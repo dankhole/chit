@@ -221,7 +221,7 @@ def run_harness(root, operation, options):
                 arguments += ["--snapshot-" + flag, value]
         for group in options.snapshot_collapse:
             arguments += ["--snapshot-collapse", group]
-        for flag in ("solid", "contrast", "backdrop", "contained_backdrop", "completed", "new_list", "recovery"):
+        for flag in ("solid", "contrast", "backdrop", "contained_backdrop", "completed", "new_list", "recovery", "sidebar"):
             if getattr(options, "snapshot_" + flag):
                 arguments += ["--snapshot-" + flag.replace("_", "-")]
     else:
@@ -285,7 +285,7 @@ def main():
             command_parser.add_argument("--snapshot-expand")
             command_parser.add_argument("--snapshot-size")
             command_parser.add_argument("--snapshot-collapse", action="append", default=[])
-            for flag in ("solid", "contrast", "backdrop", "contained-backdrop", "completed", "new-list", "recovery"):
+            for flag in ("solid", "contrast", "backdrop", "contained-backdrop", "completed", "new-list", "recovery", "sidebar"):
                 help_text = "Displays windows; requires --visible" if flag in VISIBLE_SNAPSHOT_FLAGS else None
                 command_parser.add_argument("--snapshot-" + flag, action="store_true", help=help_text)
     options = parser.parse_args()

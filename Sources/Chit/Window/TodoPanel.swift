@@ -5,6 +5,10 @@ import SwiftUI
 @MainActor
 final class TodoPanel: NSPanel {
     var dismissPanel: (() -> Void)?
+    weak var sidebarInteractionOwner: NSView?
+    var sidebarEventDisposition: ((NSEvent) -> SidebarEventDisposition)?
+    var sidebarDidRouteEvent: ((NSEvent) -> Void)?
+    var dismissSidebarDrawer: (() -> Bool)?
     private weak var pressedTaskBar: TaskBarClickRegion?
     private var taskBarDisposition: TitleClickDisposition = .editOnly
     private var taskBarWasDragged = false
@@ -12,6 +16,16 @@ final class TodoPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 
     override func sendEvent(_ event: NSEvent) {
+        switch sidebarEventDisposition?(event) ?? .normal {
+        case .consume: return
+        case .sidebar:
+            // Native task regions cover the underlying task coordinates. A
+            // modal sidebar owns these events before that routing can run.
+            super.sendEvent(event)
+            sidebarDidRouteEvent?(event)
+            return
+        case .normal: break
+        }
         if event.type == .leftMouseDragged, pressedTaskBar != nil {
             taskBarWasDragged = true
             return
@@ -64,6 +78,7 @@ final class TodoPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) {
         if let editor = firstResponder as? NSTextView, editor.hasMarkedText() { return }
         guard attachedSheet == nil else { return }
+        if dismissSidebarDrawer?() == true { return }
         dismissPanel?()
     }
 }

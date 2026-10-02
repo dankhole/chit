@@ -55,6 +55,12 @@ class LabLauncherVisibility(unittest.TestCase):
         self.assertIn("--lab-visible", command)
         self.assertNotIn("--lab-hidden", command)
 
+    def test_sidebar_snapshot_stays_hidden(self):
+        command = self.snapshot_command("--snapshot-sidebar", "--snapshot-size", "424x350")
+        self.assertIn("--snapshot-sidebar", command)
+        self.assertIn("--lab-hidden", command)
+        self.assertNotIn("--lab-visible", command)
+
     def test_window_captures_reject_before_session_lookup_or_launch(self):
         for flag in WINDOW_FLAGS:
             with self.subTest(flag=flag), \
