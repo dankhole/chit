@@ -38,8 +38,8 @@ struct NativeTextEditor: NSViewRepresentable {
         view.isRichText = false
         view.importsGraphics = false
         view.allowsUndo = true
-        view.isEditable = !context.environment.sidebarBlocksTextInput
-        view.isSelectable = !context.environment.sidebarBlocksTextInput
+        view.isEditable = true
+        view.isSelectable = true
         view.drawsBackground = false
         view.textContainer?.lineFragmentPadding = 0
         view.textContainer?.widthTracksTextView = true
@@ -76,12 +76,6 @@ struct NativeTextEditor: NSViewRepresentable {
             context.coordinator.synchronizedText = text
         }
         configure(view)
-        let acceptsInput = !context.environment.sidebarBlocksTextInput
-        // AppKit input-state setters can disturb an active composition even
-        // when assigned their current value. Touch them only for a real drawer
-        // transition; ordinary model/layout updates must retain marked text.
-        if view.isEditable != acceptsInput { view.isEditable = acceptsInput }
-        if view.isSelectable != acceptsInput { view.isSelectable = acceptsInput }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: PlainTextView, context: Context) -> CGSize? {

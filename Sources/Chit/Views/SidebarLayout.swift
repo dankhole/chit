@@ -1,77 +1,73 @@
 import AppKit
-import Combine
 import SwiftUI
 
 struct SidebarLayout {
-    static let dividerWidth: CGFloat = 6
-    let availableWidth: CGFloat
-    let isDocked: Bool
-    let sidebarVisible: Bool
-    let drawerVisible: Bool
-    let sidebarWidth: CGFloat
+    static let railWidth: CGFloat = 44
+    static let expandedWidth: CGFloat = 176
+    static let minimumExpandedWidth: CGFloat = 160
+    static let maximumExpandedWidth: CGFloat = 280
+    static let dividerWidth: CGFloat = 1
+    static let minimumTaskWidth: CGFloat = 276
+    static let minimumCollapsedWindowWidth: CGFloat = railWidth + minimumTaskWidth
 
-    var taskInset: CGFloat { isDocked && sidebarVisible ? sidebarWidth + Self.dividerWidth : 0 }
-
-    init(availableWidth: CGFloat, preferredWidth: Double, dockedOpen: Bool, drawerOpen: Bool) {
-        self.availableWidth = availableWidth.isFinite ? max(0, availableWidth) : 0
-        isDocked = self.availableWidth >= 640
-        sidebarVisible = isDocked ? dockedOpen : drawerOpen
-        drawerVisible = !isDocked && drawerOpen
-        if isDocked {
-            let preferred = preferredWidth.isFinite ? min(320, max(200, preferredWidth)) : 240
-            sidebarWidth = min(CGFloat(preferred), self.availableWidth - 360 - Self.dividerWidth)
-        } else {
-            sidebarWidth = max(0, min(280, self.availableWidth - 40))
-        }
+    let expanded: Bool
+    let preferredWidth: CGFloat
+    var sidebarWidth: CGFloat { expanded ? preferredWidth : Self.railWidth }
+    var taskInset: CGFloat { sidebarWidth + Self.dividerWidth }
+    var minimumWindowWidth: CGFloat {
+        expanded ? sidebarWidth + Self.dividerWidth + Self.minimumTaskWidth : Self.minimumCollapsedWindowWidth
     }
-}
 
-private struct SidebarBlocksTextInputKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var sidebarBlocksTextInput: Bool {
-        get { self[SidebarBlocksTextInputKey.self] }
-        set { self[SidebarBlocksTextInputKey.self] = newValue }
+    init(expanded: Bool, preferredWidth: Double = 176) {
+        self.expanded = expanded
+        self.preferredWidth = preferredWidth.isFinite
+            ? min(Self.maximumExpandedWidth, max(Self.minimumExpandedWidth, CGFloat(preferredWidth)))
+            : Self.expandedWidth
     }
 }
 
 enum SidebarEventDisposition { case normal, consume, sidebar }
 
-/// Register with the owning panel instead of layering a click gesture over its
-/// native task routing. A drawer click must never reach an editor behind it.
-struct SidebarModalBoundary: NSViewRepresentable {
-    @ObservedObject var model: AppModel
-    let active: Bool
-
-    func makeNSView(context: Context) -> SidebarModalRegion { SidebarModalRegion() }
-    func updateNSView(_ view: SidebarModalRegion, context: Context) {
-        view.setModel(model)
-        view.setActive(active)
-    }
-    static func dismantleNSView(_ view: SidebarModalRegion, coordinator: ()) { view.detach() }
+/// Marks the whole padded navigation content, including group labels and row
+/// gaps. Only the background below this content can toggle sidebar expansion.
+struct SidebarNavigationContentBoundary: NSViewRepresentable {
+    func makeNSView(context: Context) -> SidebarNavigationContentRegion { SidebarNavigationContentRegion() }
+    func updateNSView(_ view: SidebarNavigationContentRegion, context: Context) {}
 }
 
 @MainActor
-final class SidebarModalRegion: NSView {
-    weak var model: AppModel?
-    private weak var owningPanel: TodoPanel?
-    private weak var previousResponder: NSResponder?
-    private var previousProjectID = ""
-    private var desiredActive = false
-    private var appliedActive = false
-    private var editorStates: [EditorState] = []
-    private var drawerObservation: AnyCancellable?
-
-    private struct EditorState {
-        weak var editor: PlainTextView?
-        let editable: Bool
-        let selectable: Bool
-    }
-
+final class SidebarNavigationContentRegion: NSView {
     override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { desiredActive }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Navigation is nonmodal, but its native pointer events must precede the
+/// panel's task routing. The boundary never takes focus or disables editors.
+struct SidebarInteractionBoundary: NSViewRepresentable {
+    let onBlankToggle: () -> Void
+    func makeNSView(context: Context) -> SidebarInteractionRegion { SidebarInteractionRegion() }
+    func updateNSView(_ view: SidebarInteractionRegion, context: Context) { view.onBlankToggle = onBlankToggle }
+    static func dismantleNSView(_ view: SidebarInteractionRegion, coordinator: ()) { view.detach() }
+}
+
+@MainActor
+final class SidebarInteractionRegion: NSView {
+    var onBlankToggle: () -> Void = {}
+    private weak var owningPanel: TodoPanel?
+    private var blockedPointerButtons: Set<Int> = []
+    private var blankPress: BlankPress?
+    private weak var pressedDivider: SidebarDividerView?
+    private struct BlankPress {
+        let start: NSPoint
+        var cancelled = false
+    }
+    override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override init(frame frameRect: NSRect) {
@@ -83,193 +79,245 @@ final class SidebarModalRegion: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard owningPanel !== window else { return }
-        unregister()
+        detach()
         guard let panel = window as? TodoPanel else { return }
         owningPanel = panel
         panel.sidebarInteractionOwner = self
         panel.sidebarEventDisposition = { [weak self] event in self?.disposition(for: event) ?? .normal }
-        panel.sidebarDidRouteEvent = { [weak self] _ in self?.keepNativeFocusInsideDrawer() }
-        panel.dismissSidebarDrawer = { [weak self] in
-            guard let self, self.desiredActive else { return false }
-            self.model?.dismissSidebarDrawer()
-            return true
-        }
-        applyActiveState()
-    }
-
-    func setActive(_ active: Bool) {
-        desiredActive = active
-        applyActiveState()
-    }
-
-    func setModel(_ model: AppModel) {
-        guard self.model !== model else { return }
-        self.model = model
-        // Published sends synchronously before SwiftUI changes focus. Capture
-        // the original native editor before the drawer's focused row takes over.
-        drawerObservation = model.$sidebarDrawerOpen.sink { [weak self, weak model] open in
-            MainActor.assumeIsolated { self?.setActive(open && model?.sidebarIsDocked == false) }
-        }
     }
 
     func detach() {
-        drawerObservation = nil
-        desiredActive = false
-        applyActiveState()
-        unregister()
-    }
-
-    private func unregister() {
         if owningPanel?.sidebarInteractionOwner === self {
             owningPanel?.sidebarEventDisposition = nil
-            owningPanel?.sidebarDidRouteEvent = nil
-            owningPanel?.dismissSidebarDrawer = nil
             owningPanel?.sidebarInteractionOwner = nil
         }
         owningPanel = nil
-    }
-
-    private func applyActiveState() {
-        guard let panel = owningPanel, desiredActive != appliedActive else { return }
-        appliedActive = desiredActive
-        if desiredActive {
-            previousResponder = panel.firstResponder
-            previousProjectID = model?.selectedProjectID ?? ""
-            func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-            let editors = panel.contentView.map(descendants)?.compactMap { $0 as? PlainTextView } ?? []
-            editorStates = editors.map { EditorState(editor: $0, editable: $0.isEditable, selectable: $0.isSelectable) }
-            // SwiftUI's disabled environment does not make an NSTextView inert.
-            // Preserve each native value and remove these editors from input
-            // while the modal sidebar owns focus.
-            for editor in editors {
-                if editor.isEditable { editor.isEditable = false }
-                if editor.isSelectable { editor.isSelectable = false }
-            }
-            if panel.firstResponder is PlainTextView { panel.makeFirstResponder(self) }
-        } else {
-            for state in editorStates {
-                guard let editor = state.editor else { continue }
-                if editor.isEditable != state.editable { editor.isEditable = state.editable }
-                if editor.isSelectable != state.selectable { editor.isSelectable = state.selectable }
-            }
-            editorStates = []
-            if previousProjectID == model?.selectedProjectID,
-               let previous = previousResponder as? NSView, previous.window === panel,
-               (panel.firstResponder as? NSTextView)?.hasMarkedText() != true {
-                panel.makeFirstResponder(previous)
-                // Clearing SwiftUI's drawer focus occurs after this synchronous
-                // state publication. Restore again after that update only if no
-                // other native text control has acquired focus in the meantime.
-                DispatchQueue.main.async { [weak self, weak panel, weak previous] in
-                    guard let self, let panel, let previous, !self.desiredActive,
-                          self.previousProjectID == self.model?.selectedProjectID,
-                          previous.window === panel,
-                          !(panel.firstResponder is NSTextView) else { return }
-                    panel.makeFirstResponder(previous)
-                }
-            }
-            previousResponder = nil
-        }
+        blockedPointerButtons = []
+        blankPress = nil
+        pressedDivider = nil
     }
 
     private func disposition(for event: NSEvent) -> SidebarEventDisposition {
-        guard desiredActive, let panel = owningPanel, panel.attachedSheet == nil else { return .normal }
+        guard let panel = owningPanel, panel.attachedSheet == nil else { return .normal }
         switch event.type {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            guard contains(event.locationInWindow) else {
-                model?.dismissSidebarDrawer()
+            blankPress = nil
+            blockedPointerButtons.remove(event.buttonNumber)
+            // The divider's generous hit area extends into task padding. Route
+            // its gesture directly: NSWindow otherwise makes this keyboard-
+            // focusable view first responder before delivering mouseDown.
+            if event.type == .leftMouseDown { pressedDivider = nil }
+            if let divider = pointerHitView(at: event.locationInWindow) as? SidebarDividerView {
+                if event.type == .leftMouseDown {
+                    pressedDivider = divider
+                    divider.mouseDown(with: event)
+                    return .consume
+                }
+                return .sidebar
+            }
+            guard contains(event.locationInWindow) else { return .normal }
+            if event.type == .leftMouseDown,
+               event.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty,
+               containsBlankPoint(event.locationInWindow) {
+                // A safe geometry toggle must not move focus from an editor,
+                // including one that still owns unpublished marked text.
+                blankPress = BlankPress(start: event.locationInWindow)
+                return .consume
+            }
+            // Guard before a navigation button can move focus away from the
+            // owner of unpublished marked text. The model guards other callers.
+            if let editor = panel.firstResponder as? NSTextView, editor.hasMarkedText() {
+                blockedPointerButtons.insert(event.buttonNumber)
                 return .consume
             }
             return .sidebar
-        case .scrollWheel, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-            return contains(event.locationInWindow) ? .sidebar : .consume
-        case .keyDown:
-            if event.keyCode == 53 {
-                if (panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return .sidebar }
-                model?.dismissSidebarDrawer()
+        case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            if event.type == .leftMouseUp, let divider = pressedDivider {
+                pressedDivider = nil
+                divider.mouseUp(with: event)
                 return .consume
             }
-            if panel.firstResponder is PlainTextView {
-                // An accessibility or key-loop request cannot reactivate an
-                // editor covered by the drawer.
-                panel.makeFirstResponder(self)
+            if event.type == .leftMouseUp, let press = blankPress {
+                blankPress = nil
+                if !press.cancelled, event.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty,
+                   pointerDistance(from: press.start, to: event.locationInWindow) < 4,
+                   containsBlankPoint(event.locationInWindow) { onBlankToggle() }
                 return .consume
             }
-            return .sidebar
+            if blockedPointerButtons.remove(event.buttonNumber) != nil { return .consume }
+            return contains(event.locationInWindow) ? .sidebar : .normal
+        case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            if event.type == .leftMouseDragged, let divider = pressedDivider {
+                divider.mouseDragged(with: event)
+                return .consume
+            }
+            if event.type == .leftMouseDragged, let press = blankPress {
+                if pointerDistance(from: press.start, to: event.locationInWindow) >= 4 { blankPress?.cancelled = true }
+                return .consume
+            }
+            if blockedPointerButtons.contains(event.buttonNumber) { return .consume }
+            return contains(event.locationInWindow) ? .sidebar : .normal
+        case .scrollWheel:
+            blankPress?.cancelled = true
+            return contains(event.locationInWindow) ? .sidebar : .normal
         default:
-            return .sidebar
+            return .normal
         }
     }
 
-    private func contains(_ windowPoint: NSPoint) -> Bool {
+    func contains(_ windowPoint: NSPoint) -> Bool {
         let point = convert(windowPoint, from: nil)
         return bounds.contains(point) && visibleRect.contains(point)
     }
 
-    private func keepNativeFocusInsideDrawer() {
-        guard desiredActive, let panel = owningPanel, panel.attachedSheet == nil,
-              panel.firstResponder is PlainTextView else { return }
-        panel.makeFirstResponder(self)
+    func containsBlankPoint(_ windowPoint: NSPoint) -> Bool {
+        guard contains(windowPoint), let panel = owningPanel, let content = panel.contentView else { return false }
+        var hit = pointerHitView(at: windowPoint)
+        while let view = hit {
+            if view is NSControl || view is NSScroller || view is PanelResizeOverlay || view is SidebarDividerView { return false }
+            hit = view.superview
+        }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        guard let navigation = descendants(content).compactMap({ $0 as? SidebarNavigationContentRegion })
+            .first(where: { convert($0.bounds, from: $0).intersects(bounds) }) else { return false }
+        let point = convert(windowPoint, from: nil)
+        return point.y >= convert(navigation.bounds, from: navigation).maxY
     }
 
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 48, let panel = owningPanel {
-            if event.modifierFlags.contains(.shift) { panel.selectPreviousKeyView(nil) }
-            else { panel.selectNextKeyView(nil) }
-            if panel.firstResponder is PlainTextView { panel.makeFirstResponder(self) }
-        } else { super.keyDown(with: event) }
+    private func pointerHitView(at windowPoint: NSPoint) -> NSView? {
+        guard let content = owningPanel?.contentView else { return nil }
+        let hitPoint = content.superview?.convert(windowPoint, from: nil) ?? windowPoint
+        return content.hitTest(hitPoint)
     }
 
-    override func cancelOperation(_ sender: Any?) { model?.dismissSidebarDrawer() }
+    private func pointerDistance(from start: NSPoint, to end: NSPoint) -> CGFloat {
+        hypot(end.x - start.x, end.y - start.y)
+    }
 }
 
 struct SidebarResizeDivider: NSViewRepresentable {
+    static let hitWidth: CGFloat = 6
     @ObservedObject var model: AppModel
-    let availableWidth: CGFloat
-    let actualWidth: CGFloat
 
     func makeNSView(context: Context) -> SidebarDividerView { SidebarDividerView() }
     func updateNSView(_ view: SidebarDividerView, context: Context) {
-        view.sidebarWidth = actualWidth
-        view.maximumWidth = min(320, availableWidth - 360 - SidebarLayout.dividerWidth)
-        view.onResize = { model.setSidebarWidth(Double($0)) }
-        view.setAccessibilityValue(NSNumber(value: Double(actualWidth)))
+        view.active = model.sidebarExpanded
+        view.sidebarWidth = CGFloat(model.sidebarExpandedWidth)
+        view.onResize = { model.setSidebarExpandedWidth(Double($0)) }
+        view.setAccessibilityValue(NSNumber(value: model.sidebarExpandedWidth))
+        view.needsDisplay = true
+        view.window?.invalidateCursorRects(for: view)
     }
 }
 
 @MainActor
 final class SidebarDividerView: NSView {
-    var sidebarWidth: CGFloat = 240
-    var maximumWidth: CGFloat = 320
+    var active = false
+    var sidebarWidth = SidebarLayout.expandedWidth
     var onResize: (CGFloat) -> Void = { _ in }
     private var dragStartX: CGFloat?
-    private var dragStartWidth: CGFloat = 240
+    private var dragStartWidth = SidebarLayout.expandedWidth
 
+    override var acceptsFirstResponder: Bool { active }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setAccessibilityElement(true)
         setAccessibilityRole(.splitter)
         setAccessibilityLabel("Sidebar width")
         setAccessibilityIdentifier("sidebar-resize")
-        setAccessibilityHelp("Drag to resize the sidebar, or adjust by ten points.")
+        setAccessibilityHelp("Drag to resize lists, or use Left and Right Arrow to adjust by ten points.")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
-    override func draw(_ dirtyRect: NSRect) {
-        Mocha.nsSecondary.withAlphaComponent(0.15).setFill()
-        NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height).fill()
+
+    override func hitTest(_ point: NSPoint) -> NSView? { active ? super.hitTest(point) : nil }
+    override func resetCursorRects() {
+        if active { addCursorRect(bounds, cursor: .resizeLeftRight) }
     }
+    override func draw(_ dirtyRect: NSRect) {
+        guard active else { return }
+        Mocha.nsSecondary.withAlphaComponent(0.13).setFill()
+        NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height).fill()
+        if window?.firstResponder === self {
+            Mocha.nsBlue.setStroke()
+            NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5)).stroke()
+        }
+    }
+    override func becomeFirstResponder() -> Bool { needsDisplay = true; return super.becomeFirstResponder() }
+    override func resignFirstResponder() -> Bool { needsDisplay = true; return super.resignFirstResponder() }
+
     override func mouseDown(with event: NSEvent) {
-        dragStartX = NSEvent.mouseLocation.x
+        guard active, let window, window.attachedSheet == nil else { return }
+        dragStartX = window.convertPoint(toScreen: event.locationInWindow).x
         dragStartWidth = sidebarWidth
     }
     override func mouseDragged(with event: NSEvent) {
-        guard let dragStartX else { return }
-        resize(to: dragStartWidth + NSEvent.mouseLocation.x - dragStartX)
+        guard active, let start = dragStartX, let window else { return }
+        resize(to: dragStartWidth + window.convertPoint(toScreen: event.locationInWindow).x - start)
     }
     override func mouseUp(with event: NSEvent) { dragStartX = nil }
-    override func accessibilityPerformIncrement() -> Bool { resize(to: sidebarWidth + 10); return true }
-    override func accessibilityPerformDecrement() -> Bool { resize(to: sidebarWidth - 10); return true }
-    private func resize(to value: CGFloat) { onResize(min(maximumWidth, max(200, value))) }
+    override func keyDown(with event: NSEvent) {
+        guard active, event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { super.keyDown(with: event); return }
+        switch event.keyCode {
+        case 123: resize(to: sidebarWidth - 10)
+        case 124: resize(to: sidebarWidth + 10)
+        default: super.keyDown(with: event)
+        }
+    }
+    override func accessibilityPerformIncrement() -> Bool {
+        guard active else { return false }
+        resize(to: sidebarWidth + 10)
+        return true
+    }
+    override func accessibilityPerformDecrement() -> Bool {
+        guard active else { return false }
+        resize(to: sidebarWidth - 10)
+        return true
+    }
+    private func resize(to value: CGFloat) {
+        let width = min(SidebarLayout.maximumExpandedWidth, max(SidebarLayout.minimumExpandedWidth, value))
+        guard width != sidebarWidth else { return }
+        (window as? TodoPanel)?.discardSidebarExpansionRestore()
+        sidebarWidth = width
+        setAccessibilityValue(NSNumber(value: Double(width)))
+        onResize(width)
+    }
+}
+
+/// SwiftUI supplies keyboard and accessibility activation. This native pointer
+/// overlay toggles geometry without first moving focus from a composing editor.
+struct SidebarTogglePointerBoundary: NSViewRepresentable {
+    let onToggle: () -> Void
+    func makeNSView(context: Context) -> SidebarTogglePointerRegion { SidebarTogglePointerRegion() }
+    func updateNSView(_ view: SidebarTogglePointerRegion, context: Context) { view.onToggle = onToggle }
+}
+
+@MainActor
+final class SidebarTogglePointerRegion: NSView {
+    var onToggle: () -> Void = {}
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let event = NSApp.currentEvent, event.type == .rightMouseDown
+            || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) { return nil }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window, window.attachedSheet == nil else { return }
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp],
+                                         until: .distantFuture, inMode: .eventTracking, dequeue: true) {
+            if next.type == .leftMouseUp {
+                if bounds.contains(convert(next.locationInWindow, from: nil)) { onToggle() }
+                return
+            }
+        }
+    }
 }

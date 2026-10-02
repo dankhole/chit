@@ -44,6 +44,7 @@ struct ProjectDragHandle: NSViewRepresentable {
     let destination: ProjectDragDestination
     let onClick: () -> Void
     var tooltip: String? = nil
+    var draggingEnabled = true
 
     func makeNSView(context: Context) -> ProjectDragView {
         let view = ProjectDragView()
@@ -59,6 +60,7 @@ struct ProjectDragHandle: NSViewRepresentable {
         view.destination = destination
         view.onClick = onClick
         view.toolTip = tooltip
+        view.draggingEnabled = draggingEnabled
     }
 }
 
@@ -69,6 +71,7 @@ final class ProjectDragView: NSView, NSDraggingSource {
     var sourceProject: Project?
     var destination: ProjectDragDestination = .group(nil)
     var onClick: () -> Void = {}
+    var draggingEnabled = true
     private var lastTarget: AppModel.ProjectDropTarget?
 
     override var mouseDownCanMoveWindow: Bool { false }
@@ -100,6 +103,7 @@ final class ProjectDragView: NSView, NSDraggingSource {
                 return
             }
             guard hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) >= 4,
+                  draggingEnabled,
                   let project = sourceProject, let model, let dragState,
                   model.isStoreAvailable else { continue }
             let payload = dragState.begin(project: project, model: model)
@@ -161,7 +165,7 @@ final class ProjectDragView: NSView, NSDraggingSource {
     }
 
     func acceptedPayload(from pasteboard: NSPasteboard) -> ProjectDragPayload? {
-        guard let model, let active = dragState?.payload,
+        guard draggingEnabled, let model, let active = dragState?.payload,
               let data = pasteboard.data(forType: Self.pasteboardType),
               let payload = try? JSONDecoder().decode(ProjectDragPayload.self, from: data),
               payload == active, payload.workspaceScope == model.projectDragScope,
@@ -189,7 +193,7 @@ final class ProjectDragView: NSView, NSDraggingSource {
     /// coordinate orientation. The native harness uses the same edge path.
     @discardableResult
     func autoscrollSidebar(at windowPoint: NSPoint) -> Bool {
-        guard dragState?.payload != nil, let scrollView = enclosingScrollView else { return false }
+        guard draggingEnabled, dragState?.payload != nil, let scrollView = enclosingScrollView else { return false }
         let clip = scrollView.contentView
         let point = clip.convert(windowPoint, from: nil)
         guard clip.bounds.contains(point) else { return false }

@@ -19,78 +19,92 @@ final class SidebarPreferencesTests: XCTestCase {
         try body(store, preferences, root)
     }
 
-    func testDefaultsAndBreakpointKeepDockedPreferenceIndependent() throws {
+    private func preferenceKey(_ store: TodoStore) -> String {
+        "workspace." + Data(store.url.standardizedFileURL.path.utf8).base64EncodedString()
+    }
+
+    func testNewWorkspaceStartsWithCompactNavigation() throws {
         try withFixture { store, preferences, _ in
             let model = AppModel(store: store, preferences: preferences, watchChanges: false)
-            XCTAssertTrue(model.sidebarDockedOpen)
-            XCTAssertEqual(model.sidebarWidth, 240)
-            XCTAssertFalse(model.sidebarDrawerOpen)
-            model.updateSidebarLayout(availableWidth: 640)
-            XCTAssertTrue(model.sidebarIsDocked)
-            XCTAssertTrue(model.sidebarVisible)
-            XCTAssertTrue(model.toggleSidebar())
-            XCTAssertFalse(model.sidebarDockedOpen)
-
-            model.updateSidebarLayout(availableWidth: 639)
-            XCTAssertFalse(model.sidebarIsDocked)
-            XCTAssertFalse(model.sidebarVisible)
-            XCTAssertTrue(model.showSidebarDrawer())
-            XCTAssertTrue(model.sidebarDrawerOpen)
-            XCTAssertFalse(model.sidebarDockedOpen)
-            model.updateSidebarLayout(availableWidth: 900)
-            XCTAssertFalse(model.sidebarDrawerOpen)
-            XCTAssertFalse(model.sidebarVisible)
-            model.updateSidebarLayout(availableWidth: 400)
-            XCTAssertFalse(model.sidebarDrawerOpen, "Entering narrow mode always starts with a closed drawer.")
+            XCTAssertFalse(model.sidebarExpanded)
+            XCTAssertEqual(model.sidebarExpandedWidth, 176)
+            model.toggleSidebar()
+            XCTAssertTrue(model.sidebarExpanded)
+            model.toggleSidebar()
+            XCTAssertFalse(model.sidebarExpanded)
         }
     }
 
-    func testRelaunchPersistsDockedVisibilityAndWidthButNeverDrawerState() throws {
+    func testRelaunchPersistsExplicitExpansionAndCollapse() throws {
         try withFixture { store, preferences, _ in
             let model = AppModel(store: store, preferences: preferences, watchChanges: false)
-            model.updateSidebarLayout(availableWidth: 900)
-            XCTAssertTrue(model.toggleSidebar())
-            model.setSidebarWidth(295)
-            model.updateSidebarLayout(availableWidth: 400)
-            XCTAssertTrue(model.toggleSidebar())
-            XCTAssertTrue(model.sidebarDrawerOpen)
+            model.entryDrafts = ["add:retained-list": "Unfinished task"]
+            model.setSidebarExpandedWidth(232)
+            model.toggleSidebar()
 
             let reopened = AppModel(store: store, preferences: preferences, watchChanges: false)
-            XCTAssertFalse(reopened.sidebarDockedOpen)
-            XCTAssertEqual(reopened.sidebarWidth, 295)
-            XCTAssertFalse(reopened.sidebarDrawerOpen)
-            XCTAssertFalse(reopened.sidebarIsDocked)
-            reopened.updateSidebarLayout(availableWidth: 900)
-            XCTAssertFalse(reopened.sidebarVisible)
+            XCTAssertTrue(reopened.sidebarExpanded)
+            XCTAssertEqual(reopened.sidebarExpandedWidth, 232)
+            XCTAssertEqual(reopened.entryDrafts, model.entryDrafts)
+            reopened.toggleSidebar()
+            let collapsed = AppModel(store: store, preferences: preferences, watchChanges: false)
+            XCTAssertFalse(collapsed.sidebarExpanded)
+            XCTAssertEqual(collapsed.sidebarExpandedWidth, 232)
+            XCTAssertEqual(collapsed.entryDrafts, model.entryDrafts)
         }
     }
 
-    func testWidthClampsAndRejectsNonFiniteValues() throws {
+    func testObsoleteDrawerAndWidthPreferencesDoNotExpandRail() throws {
+        try withFixture { store, preferences, _ in
+            let key = preferenceKey(store)
+            preferences.set(["sidebarDockedOpen": true, "sidebarWidth": 295,
+                             "sidebarDrawerOpen": true, "entryDrafts": ["add:retained-list": "Keep this"]], forKey: key)
+            let model = AppModel(store: store, preferences: preferences, watchChanges: false)
+            XCTAssertFalse(model.sidebarExpanded)
+            XCTAssertEqual(model.sidebarExpandedWidth, 176)
+            XCTAssertEqual(model.entryDrafts["add:retained-list"], "Keep this")
+            model.toggleSidebar()
+            let saved = try XCTUnwrap(preferences.dictionary(forKey: key))
+            XCTAssertEqual(saved["sidebarExpanded"] as? Bool, true)
+            XCTAssertEqual(saved["sidebarExpandedWidth"] as? Double, 176)
+            XCTAssertNil(saved["sidebarDockedOpen"])
+            XCTAssertNil(saved["sidebarWidth"])
+            XCTAssertNil(saved["sidebarDrawerOpen"])
+        }
+    }
+
+    func testInvalidExpansionPreferenceFallsBackToCompactRail() throws {
+        try withFixture { store, preferences, _ in
+            preferences.set(["sidebarExpanded": "invalid", "sidebarExpandedWidth": "invalid"], forKey: preferenceKey(store))
+            let model = AppModel(store: store, preferences: preferences, watchChanges: false)
+            XCTAssertFalse(model.sidebarExpanded)
+            XCTAssertEqual(model.sidebarExpandedWidth, 176)
+        }
+    }
+
+    func testExpandedWidthClampsAndRejectsNonFiniteValues() throws {
         try withFixture { store, preferences, _ in
             let model = AppModel(store: store, preferences: preferences, watchChanges: false)
-            model.setSidebarWidth(100)
-            XCTAssertEqual(model.sidebarWidth, 200)
-            model.setSidebarWidth(700)
-            XCTAssertEqual(model.sidebarWidth, 320)
-            model.setSidebarWidth(.nan)
-            model.setSidebarWidth(.infinity)
-            XCTAssertEqual(model.sidebarWidth, 320)
+            model.setSidebarExpandedWidth(40)
+            XCTAssertEqual(model.sidebarExpandedWidth, 160)
+            model.setSidebarExpandedWidth(700)
+            XCTAssertEqual(model.sidebarExpandedWidth, 280)
+            model.setSidebarExpandedWidth(.nan)
+            model.setSidebarExpandedWidth(.infinity)
+            XCTAssertEqual(model.sidebarExpandedWidth, 280)
             let reopened = AppModel(store: store, preferences: preferences, watchChanges: false)
-            XCTAssertEqual(reopened.sidebarWidth, 320)
+            XCTAssertEqual(reopened.sidebarExpandedWidth, 280)
+            XCTAssertFalse(reopened.sidebarExpanded)
         }
     }
 
-    func testRestoredWidthIsValidatedAndClamped() throws {
+    func testRestoredExpandedWidthIsClamped() throws {
         try withFixture { store, preferences, _ in
-            let key = "workspace." + Data(store.url.standardizedFileURL.path.utf8).base64EncodedString()
-            preferences.set(["sidebarWidth": -20, "sidebarDockedOpen": false], forKey: key)
-            let clamped = AppModel(store: store, preferences: preferences, watchChanges: false)
-            XCTAssertEqual(clamped.sidebarWidth, 200)
-            XCTAssertFalse(clamped.sidebarDockedOpen)
-            preferences.set(["sidebarWidth": "invalid"], forKey: key)
-            let fallback = AppModel(store: store, preferences: preferences, watchChanges: false)
-            XCTAssertEqual(fallback.sidebarWidth, 240)
-            XCTAssertTrue(fallback.sidebarDockedOpen)
+            let key = preferenceKey(store)
+            preferences.set(["sidebarExpandedWidth": -20], forKey: key)
+            XCTAssertEqual(AppModel(store: store, preferences: preferences, watchChanges: false).sidebarExpandedWidth, 160)
+            preferences.set(["sidebarExpandedWidth": 800], forKey: key)
+            XCTAssertEqual(AppModel(store: store, preferences: preferences, watchChanges: false).sidebarExpandedWidth, 280)
         }
     }
 
@@ -98,22 +112,22 @@ final class SidebarPreferencesTests: XCTestCase {
         try withFixture { store, preferences, root in
             let model = AppModel(store: store, preferences: preferences, watchChanges: false)
             let catalog = try Data(contentsOf: store.catalogURL)
-            model.updateSidebarLayout(availableWidth: 900)
-            XCTAssertTrue(model.toggleSidebar())
-            model.setSidebarWidth(270)
+            model.toggleSidebar()
+            model.setSidebarExpandedWidth(220)
+            XCTAssertTrue(model.sidebarExpanded)
             XCTAssertEqual(try Data(contentsOf: store.catalogURL), catalog)
 
             let otherStore = TodoStore(url: root.appendingPathComponent("other/workspace.json"))
             let otherWorkspace = AppModel(store: otherStore, preferences: preferences, watchChanges: false)
-            XCTAssertTrue(otherWorkspace.sidebarDockedOpen)
-            XCTAssertEqual(otherWorkspace.sidebarWidth, 240)
+            XCTAssertFalse(otherWorkspace.sidebarExpanded)
+            XCTAssertEqual(otherWorkspace.sidebarExpandedWidth, 176)
 
             let separateSuite = "ChitSidebarTests.Isolated.\(UUID().uuidString)"
             let separatePreferences = try XCTUnwrap(UserDefaults(suiteName: separateSuite))
             defer { separatePreferences.removePersistentDomain(forName: separateSuite) }
             let separateSession = AppModel(store: store, preferences: separatePreferences, watchChanges: false)
-            XCTAssertTrue(separateSession.sidebarDockedOpen)
-            XCTAssertEqual(separateSession.sidebarWidth, 240)
+            XCTAssertFalse(separateSession.sidebarExpanded)
+            XCTAssertEqual(separateSession.sidebarExpandedWidth, 176)
         }
     }
 }

@@ -2,33 +2,30 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// A stable header keeps the active list and window controls available even
-/// when the navigation sidebar is closed.
+/// The current list and navigation toggle stay in place in both sidebar modes.
 struct ProjectHeader: View {
     @ObservedObject var model: AppModel
-    let sidebarVisible: Bool
+    let sidebarExpanded: Bool
     var onToggleSidebar: () -> Void
-    var onNewList: (String?) -> Void
-    @State private var form: ProjectNameForm?
     @State private var interactiveFrames: [CGRect] = []
 
     var body: some View {
-        let drawerOpen = !model.sidebarIsDocked && model.sidebarDrawerOpen
         HStack(spacing: 3) {
             PanelCloseControl()
-                .frame(width: 22, height: Mocha.headerRowHeight)
+                .frame(width: 24, height: Mocha.headerRowHeight)
                 .background(HeaderControlBounds())
             Button(action: onToggleSidebar) {
                 Image(systemName: "sidebar.leading")
                     .font(.system(size: 13))
-                    .foregroundStyle(sidebarVisible ? Mocha.blue : Mocha.secondary)
+                    .foregroundStyle(sidebarExpanded ? Mocha.blue : Mocha.secondary)
                     .frame(width: 26, height: Mocha.headerRowHeight)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(sidebarVisible ? "Hide lists sidebar" : "Show lists sidebar")
-            .accessibilityValue(sidebarVisible ? "Expanded" : "Collapsed")
-            .help(sidebarVisible ? "Hide lists sidebar" : "Show lists sidebar")
+            .accessibilityLabel(sidebarExpanded ? "Collapse lists" : "Expand lists")
+            .accessibilityValue(sidebarExpanded ? "Expanded" : "Collapsed")
+            .help(sidebarExpanded ? "Collapse lists" : "Expand lists")
+            .overlay { SidebarTogglePointerBoundary(onToggle: onToggleSidebar) }
             .background(HeaderControlBounds())
             if LabEnvironment.isEnabled {
                 Text("LAB")
@@ -36,7 +33,6 @@ struct ProjectHeader: View {
                     .foregroundStyle(Mocha.secondary)
                     .help("Chit Lab · disposable session")
                     .accessibilityLabel("Chit Lab, disposable session")
-                    .accessibilityHidden(drawerOpen)
             }
             HStack(spacing: 5) {
                 Text(model.selectedProject?.name ?? "Chit")
@@ -45,7 +41,7 @@ struct ProjectHeader: View {
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if let project = model.selectedProject {
-                    ProjectStatusGlyphs(model: model, project: project, showsLocation: true)
+                    ProjectStatusGlyphs(model: model, project: project)
                 }
             }
             .padding(.leading, 4)
@@ -55,26 +51,6 @@ struct ProjectHeader: View {
             .accessibilityLabel(model.selectedProject.map {
                 "Current list: " + ProjectPresentation.description($0, model: model)
             } ?? "Chit")
-            .accessibilityHidden(drawerOpen)
-            Menu {
-                ProjectManagementMenuItems(model: model, onNewList: onNewList,
-                    onNameForm: { form = $0 }, onSelect: { model.selectProject($0.id) })
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Mocha.blue)
-                    .frame(width: 22, height: Mocha.headerRowHeight)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .frame(width: 22, height: Mocha.headerRowHeight)
-            .accessibilityLabel("Lists and groups")
-            .help("Create and manage lists and groups")
-            .disabled(!model.isStoreAvailable || drawerOpen)
-            .accessibilityHidden(drawerOpen)
-            .background(HeaderControlBounds())
-            .modifier(ProjectNameFormPresenter(model: model, form: $form, arrowEdge: .bottom))
         }
         .frame(height: Mocha.headerRowHeight)
         .coordinateSpace(name: "project-header")
@@ -84,13 +60,11 @@ struct ProjectHeader: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("List header")
     }
-
 }
 
 struct ProjectSidebar: View {
     @ObservedObject var model: AppModel
     var onNewList: (String?) -> Void
-    var onSelect: () -> Void
     @StateObject private var dragState = ProjectDragState()
     @State private var form: ProjectNameForm?
     @FocusState private var focusedRow: SidebarFocus?
@@ -98,45 +72,35 @@ struct ProjectSidebar: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    if !model.sidebarIsDocked { drawerHeading }
-                    VStack(alignment: .leading, spacing: 2) {
-                        if !model.workspace.groups.isEmpty || dragState.payload != nil { ungroupedHeading }
-                        ForEach(model.workspace.projects.filter { $0.groupID == nil }) { project in
-                            projectRow(project)
-                        }
-                        if model.workspace.projects.isEmpty && model.workspace.groups.isEmpty {
-                            Text("No lists yet")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Mocha.secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                        }
+                VStack(alignment: .leading, spacing: 0) {
+                    createListRow
+                    ForEach(model.workspace.projects.filter { $0.groupID == nil }) { project in
+                        projectRow(project)
+                    }
+                    if model.workspace.projects.isEmpty && model.workspace.groups.isEmpty {
+                        placeholder("No lists yet")
                     }
                     ForEach(model.workspace.groups) { group in
-                        VStack(alignment: .leading, spacing: 2) {
-                            groupHeading(group)
-                            if !model.collapsedGroupIDs.contains(group.id) {
-                                let projects = model.workspace.projects.filter { $0.groupID == group.id }
-                                ForEach(projects) { project in projectRow(project) }
-                                if projects.isEmpty {
-                                    Text("No lists")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(Mocha.secondary)
-                                        .padding(.leading, 22)
-                                        .padding(.vertical, 5)
-                                }
-                            }
+                        groupHeading(group)
+                        if !model.collapsedGroupIDs.contains(group.id) {
+                            let projects = model.workspace.projects.filter { $0.groupID == group.id }
+                            ForEach(projects) { project in projectRow(project) }
+                            if projects.isEmpty { placeholder("No lists") }
                         }
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.top, 7)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 4)
+                .padding(.top, 6)
+                .padding(.bottom, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(SidebarNavigationContentBoundary())
             }
             .onChange(of: focusedRow) { _, row in
                 if let row { proxy.scrollTo(row) }
+            }
+            .onChange(of: model.selectedProjectID) { _, id in
+                let row = SidebarFocus.project(id)
+                if visibleRows.contains(row) { proxy.scrollTo(row) }
             }
         }
         .font(.system(size: 12))
@@ -144,108 +108,133 @@ struct ProjectSidebar: View {
         .accessibilityLabel("Lists sidebar")
         .modifier(ProjectNameFormPresenter(model: model, form: $form, arrowEdge: .trailing))
         .onDisappear { dragState.finish() }
-        .onAppear {
-            if model.sidebarVisible && !model.sidebarIsDocked && model.sidebarDrawerOpen { focusedRow = preferredFocus }
-        }
-        .onChange(of: model.sidebarDrawerOpen) { _, open in
-            focusedRow = open && model.sidebarVisible ? preferredFocus : nil
-        }
-        .onChange(of: model.sidebarVisible) { _, visible in
-            if !visible { focusedRow = nil }
+        .onChange(of: model.sidebarExpanded) { _, expanded in
+            if !expanded { dragState.finish() }
         }
         .onChange(of: visibleRows) { _, rows in
-            if model.sidebarVisible, let focusedRow, !rows.contains(focusedRow) { self.focusedRow = preferredFocus }
-        }
-    }
-
-    private var drawerHeading: some View {
-        HStack {
-            Text("Lists").font(.system(size: 12, weight: .semibold))
-            Spacer()
-            Menu {
-                ProjectManagementMenuItems(model: model, onNewList: onNewList,
-                    onNameForm: { form = $0 }, onSelect: select)
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Mocha.blue)
-                    .frame(width: 22, height: 26)
+            if let focusedRow, !rows.contains(focusedRow) {
+                self.focusedRow = replacementFocus(for: focusedRow, in: rows)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .frame(width: 22, height: 26)
-            .accessibilityLabel("Lists and groups")
-            .help("Create and manage lists and groups")
-            .disabled(!model.isStoreAvailable)
-            Button("Done", action: onSelect)
-                .buttonStyle(.plain)
-                .foregroundStyle(Mocha.blue)
-                .padding(.horizontal, 5)
-                .frame(height: 26)
-                .overlay { focusOutline(.done) }
-                .focusable(true)
-                .focused($focusedRow, equals: .done)
-                .onKeyPress(keys: navigationKeys, action: navigate)
-                .modifier(SidebarKeyboardActivation(action: onSelect))
-                .accessibilityLabel("Close lists sidebar")
-                .id(SidebarFocus.done)
         }
-        .padding(.horizontal, 8)
     }
 
-    private var ungroupedHeading: some View {
-        Text("Ungrouped")
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(Mocha.secondary)
-            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-            .padding(.horizontal, 8)
-            .background(dragState.hoveredTarget == .group(nil) ? Mocha.selected : Color.clear,
-                in: RoundedRectangle(cornerRadius: 5))
+    private func placeholder(_ title: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "list.bullet")
+                .font(.system(size: 11))
+                .frame(width: 24, height: 24)
+            if model.sidebarExpanded {
+                Text(title).font(.system(size: 11)).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .foregroundStyle(Mocha.secondary)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .help(title)
+    }
+
+    private var createListRow: some View {
+        let tooltip = model.sidebarExpanded
+            ? "Create List · Drop a list here to remove it from its group"
+            : "Create List · Right-click to manage lists and groups"
+        return HStack(spacing: 0) {
+            Button(action: createList) {
+                HStack(spacing: 7) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Mocha.blue)
+                        .frame(width: 24, height: 24)
+                    if model.sidebarExpanded {
+                        Text("Create List")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Mocha.secondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.leading, 6)
+                .padding(.trailing, model.sidebarExpanded ? 3 : 6)
+                .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(true)
+            .focused($focusedRow, equals: .create)
+            .onKeyPress(keys: navigationKeys, action: navigate)
+            .modifier(SidebarKeyboardActivation(action: createList))
+            .accessibilityIdentifier("create-list")
+            .accessibilityLabel("Create List")
+            .accessibilityHint("Create a list in Chit")
+            .help(tooltip)
             .overlay {
-                ProjectDragHandle(model: model, state: dragState, destination: .group(nil), onClick: {},
-                    tooltip: "Drop a list here to remove it from its group")
+                ProjectDragHandle(model: model, state: dragState, destination: .group(nil),
+                    onClick: createList, tooltip: tooltip, draggingEnabled: model.sidebarExpanded)
             }
-            .accessibilityLabel("Ungrouped lists")
+            .disabled(!model.isStoreAvailable)
+            if model.sidebarExpanded {
+                Menu {
+                    managementMenuItems
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Mocha.secondary)
+                        .frame(width: 24, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .modifier(SidebarMenuStyle(label: "Lists and groups"))
+                .accessibilityIdentifier("list-management-menu")
+                .help("Create and manage lists and groups")
+                .disabled(!model.isStoreAvailable)
+            }
+        }
+        .background(dragState.hoveredTarget == .group(nil) ? Mocha.selected : Color.clear,
+            in: RoundedRectangle(cornerRadius: 5))
+        .overlay { focusOutline(.create) }
+        .contextMenu { managementMenuItems }
+        .id(SidebarFocus.create)
+    }
+
+    private var managementMenuItems: some View {
+        ProjectManagementMenuItems(model: model, onNewList: onNewList,
+            onNameForm: { form = $0 }, onSelect: select)
+            .disabled(!model.isStoreAvailable)
+    }
+
+    private func createList() {
+        guard model.isStoreAvailable, !hasActiveTextComposition else { return }
+        onNewList(nil)
+    }
+
+    private var hasActiveTextComposition: Bool {
+        (NSApp?.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
     }
 
     private func projectRow(_ project: Project) -> some View {
         let selected = model.selectedProjectID == project.id
         let focus = SidebarFocus.project(project.id)
+        let description = ProjectPresentation.description(project, model: model)
         return HStack(spacing: 0) {
             Button { select(project) } label: {
-                HStack(alignment: .top, spacing: 6) {
-                    if ProjectPresentation.isExternal(project.id, model: model) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Mocha.secondary)
-                            .frame(width: 13, height: 16)
-                            .accessibilityHidden(true)
-                    }
-                    VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 7) {
+                    ProjectBadge(project: project, showsStatus: !model.sidebarExpanded,
+                        hasIssue: model.issue(for: project.id) != nil,
+                        hasOverdue: model.hasOverdueTasks(projectID: project.id))
+                    if model.sidebarExpanded {
                         Text(project.name)
                             .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                            .foregroundStyle(selected ? Mocha.blue : Mocha.text)
-                            .lineLimit(2)
+                            .foregroundStyle(Mocha.text)
+                            .lineLimit(1)
                             .truncationMode(.tail)
-                            .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        if let location = model.location(for: project.id), !location.isManaged {
-                            Text((location.url.path as NSString).abbreviatingWithTildeInPath)
-                                .font(.system(size: 11))
-                                .foregroundStyle(Mocha.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                        ProjectStatusGlyphs(model: model, project: project)
                     }
-                    ProjectStatusGlyphs(model: model, project: project)
-                        .frame(minHeight: 16)
                 }
-                .padding(.leading, project.groupID == nil ? 8 : 22)
-                .padding(.trailing, 3)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .padding(.leading, 6)
+                .padding(.trailing, model.sidebarExpanded ? 3 : 6)
+                .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -253,22 +242,32 @@ struct ProjectSidebar: View {
             .focused($focusedRow, equals: focus)
             .onKeyPress(keys: navigationKeys, action: navigate)
             .modifier(SidebarKeyboardActivation { select(project) })
-            .accessibilityLabel(ProjectPresentation.description(project, model: model))
+            .accessibilityIdentifier("list-row-\(project.id)")
+            .accessibilityLabel(description)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityHint("Open list")
-            .help(ProjectPresentation.description(project, model: model))
+            .help(description)
             .overlay {
                 ProjectDragHandle(model: model, state: dragState, sourceProject: project,
                     destination: .tab(project.id), onClick: { select(project) },
-                    tooltip: ProjectPresentation.description(project, model: model))
+                    tooltip: description, draggingEnabled: model.sidebarExpanded)
             }
-            Menu {
-                ProjectMenuItems(model: model, project: project) { form = $0 }
-            } label: { rowMenuGlyph }
-            .modifier(SidebarMenuStyle(label: "Manage \(project.name)"))
-            .disabled(!model.isStoreAvailable)
+            if model.sidebarExpanded {
+                Menu {
+                    ProjectMenuItems(model: model, project: project) { form = $0 }
+                } label: { rowMenuGlyph }
+                .modifier(SidebarMenuStyle(label: "Manage \(project.name)"))
+                .accessibilityIdentifier("list-menu-\(project.id)")
+                .disabled(!model.isStoreAvailable)
+            }
         }
         .background(selected ? Mocha.selected : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+        .overlay(alignment: .leading) {
+            if selected {
+                Capsule().fill(Mocha.blue).frame(width: 2, height: 20)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
         .overlay { focusOutline(focus) }
         .overlay(alignment: .top) {
             if dragState.hoveredTarget == .before(project.id) { insertionMark }
@@ -284,11 +283,13 @@ struct ProjectSidebar: View {
         let focus = SidebarFocus.group(group.id)
         return HStack(spacing: 0) {
             groupDisclosureButton(group)
-            Menu {
-                ProjectGroupMenuItems(model: model, group: group, onNewList: onNewList) { form = $0 }
-            } label: { rowMenuGlyph }
-            .modifier(SidebarMenuStyle(label: "Manage group \(group.name)"))
-            .disabled(!model.isStoreAvailable)
+            if model.sidebarExpanded {
+                Menu {
+                    ProjectGroupMenuItems(model: model, group: group, onNewList: onNewList) { form = $0 }
+                } label: { rowMenuGlyph }
+                .modifier(SidebarMenuStyle(label: "Manage group \(group.name)"))
+                .disabled(!model.isStoreAvailable)
+            }
         }
         .background(dragState.hoveredTarget == .group(group.id) ? Mocha.selected : Color.clear,
             in: RoundedRectangle(cornerRadius: 5))
@@ -303,33 +304,33 @@ struct ProjectSidebar: View {
         let collapsed = model.collapsedGroupIDs.contains(group.id)
         let selected: Project? = model.selectedProject?.groupID == group.id ? model.selectedProject : nil
         let projects = model.workspace.projects.filter { $0.groupID == group.id }
-        let hasIssue = collapsed && projects.contains { model.issue(for: $0.id) != nil }
-        let hasOverdue = collapsed && projects.contains { model.hasOverdueTasks(projectID: $0.id) }
+        let hasIssue = (collapsed || !model.sidebarExpanded) && projects.contains { model.issue(for: $0.id) != nil }
+        let hasOverdue = (collapsed || !model.sidebarExpanded) && projects.contains { model.hasOverdueTasks(projectID: $0.id) }
         let focus = SidebarFocus.group(group.id)
-        var accessibilityLabel = group.name
-        var tooltip = group.name
+        var accessibilityLabel = "Group \(group.name)"
         if let selected {
             accessibilityLabel += ", current list: \(selected.name)"
-            tooltip += " · " + ProjectPresentation.description(selected, model: model)
         }
         if hasIssue { accessibilityLabel += ", contains lists needing attention" }
         if hasOverdue { accessibilityLabel += ", contains overdue tasks" }
+        let tooltip = accessibilityLabel + (collapsed ? ", collapsed" : ", expanded")
         return Button { toggle(group) } label: {
             ProjectGroupHeadingLabel(group: group, selected: selected, collapsed: collapsed,
-                hasIssue: hasIssue, hasOverdue: hasOverdue)
+                expanded: model.sidebarExpanded, hasIssue: hasIssue, hasOverdue: hasOverdue)
         }
         .buttonStyle(.plain)
         .focusable(true)
         .focused($focusedRow, equals: focus)
         .onKeyPress(keys: navigationKeys, action: navigate)
         .modifier(SidebarKeyboardActivation { toggle(group) })
+        .accessibilityIdentifier("group-row-\(group.id)")
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(collapsed ? "Collapsed group" : "Expanded group")
         .accessibilityHint(collapsed ? "Expand to show lists" : "Collapse lists")
         .help(tooltip)
         .overlay {
             ProjectDragHandle(model: model, state: dragState, destination: .group(group.id),
-                onClick: { toggle(group) }, tooltip: group.name)
+                onClick: { toggle(group) }, tooltip: tooltip, draggingEnabled: model.sidebarExpanded)
         }
     }
 
@@ -337,7 +338,7 @@ struct ProjectSidebar: View {
         Image(systemName: "ellipsis")
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Mocha.secondary)
-            .frame(width: 24, height: 28)
+            .frame(width: 24, height: 32)
             .contentShape(Rectangle())
     }
 
@@ -353,12 +354,14 @@ struct ProjectSidebar: View {
     }
 
     private func select(_ project: Project) {
+        // The native row overlay reaches this guard before changing responder
+        // or SwiftUI focus, so a marked-text editor can refuse navigation.
+        guard model.selectProject(project.id) else { return }
         focusedRow = .project(project.id)
-        model.selectProject(project.id)
-        onSelect()
     }
 
     private func toggle(_ group: ProjectGroup) {
+        guard !hasActiveTextComposition else { return }
         focusedRow = .group(group.id)
         model.toggleGroup(group.id)
     }
@@ -366,7 +369,7 @@ struct ProjectSidebar: View {
     private var navigationKeys: Set<KeyEquivalent> { [.upArrow, .downArrow, .leftArrow, .rightArrow, .home, .end] }
 
     private var visibleRows: [SidebarFocus] {
-        var rows: [SidebarFocus] = model.sidebarIsDocked ? [] : [.done]
+        var rows: [SidebarFocus] = [.create]
         rows += model.workspace.projects.filter { $0.groupID == nil }.map { .project($0.id) }
         for group in model.workspace.groups {
             rows.append(.group(group.id))
@@ -377,17 +380,26 @@ struct ProjectSidebar: View {
         return rows
     }
 
-    private var preferredFocus: SidebarFocus? {
-        if let project = model.selectedProject {
-            let row = SidebarFocus.project(project.id)
-            if visibleRows.contains(row) { return row }
-            if let groupID = project.groupID { return .group(groupID) }
+    private func replacementFocus(for row: SidebarFocus, in rows: [SidebarFocus]) -> SidebarFocus? {
+        switch row {
+        case .create: return .create
+        case .project(let id):
+            if let groupID = model.workspace.projects.first(where: { $0.id == id })?.groupID,
+               rows.contains(.group(groupID)) { return .group(groupID) }
+        case .group(let id):
+            let projects = model.workspace.projects.filter { $0.groupID == id }
+            if let selected = projects.first(where: { $0.id == model.selectedProjectID }),
+               rows.contains(.project(selected.id)) {
+                return .project(selected.id)
+            }
+            if let first = projects.first, rows.contains(.project(first.id)) { return .project(first.id) }
         }
-        return visibleRows.first
+        let selected = SidebarFocus.project(model.selectedProjectID)
+        return rows.contains(selected) ? selected : rows.first
     }
 
     private func navigate(_ press: KeyPress) -> KeyPress.Result {
-        guard press.modifiers.isEmpty, let row = focusedRow else { return .ignored }
+        guard press.modifiers.isEmpty, !hasActiveTextComposition, let row = focusedRow else { return .ignored }
         let rows = visibleRows
         guard let index = rows.firstIndex(of: row) else { return .ignored }
         switch press.key {
@@ -403,7 +415,7 @@ struct ProjectSidebar: View {
                 if let groupID = model.workspace.projects.first(where: { $0.id == id })?.groupID {
                     focusedRow = .group(groupID)
                 }
-            case .done: return .ignored
+            case .create: return .ignored
             }
         case .rightArrow:
             guard case .group(let id) = row else { return .ignored }
@@ -418,46 +430,88 @@ struct ProjectSidebar: View {
 }
 
 private enum SidebarFocus: Hashable {
-    case done, project(String), group(String)
+    case create, project(String), group(String)
+}
+
+private struct ProjectBadge: View {
+    let project: Project
+    let showsStatus: Bool
+    let hasIssue: Bool
+    let hasOverdue: Bool
+
+    var body: some View {
+        Text(ProjectPresentation.monogram(project.name))
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Mocha.text)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .frame(width: 24, height: 24)
+            .background(Mocha.listBadgeColor(for: project.id), in: RoundedRectangle(cornerRadius: 5))
+            .overlay(alignment: .bottomTrailing) {
+                if showsStatus && (hasIssue || hasOverdue) {
+                    Image(systemName: hasIssue ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Mocha.warning)
+                        .frame(width: 12, height: 12)
+                        .background(Mocha.selected, in: Circle())
+                        .offset(x: 3, y: 2)
+                }
+            }
+            .accessibilityHidden(true)
+    }
 }
 
 private struct ProjectGroupHeadingLabel: View {
     let group: ProjectGroup
     let selected: Project?
     let collapsed: Bool
+    let expanded: Bool
     let hasIssue: Bool
     let hasOverdue: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                .font(.system(size: 9, weight: .medium))
-                .frame(width: 8)
+        HStack(spacing: 7) {
+            Image(systemName: collapsed ? "folder" : "folder.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(selected != nil ? Mocha.blue : Mocha.secondary)
+                .frame(width: 24, height: 24)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 7, weight: .semibold))
+                        .frame(width: 9, height: 9)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if !expanded && selected != nil {
+                        Circle().fill(Mocha.blue).frame(width: 4, height: 4)
+                    }
+                }
+                .overlay(alignment: .bottomLeading) {
+                    if !expanded && (hasIssue || hasOverdue) {
+                        Image(systemName: hasIssue ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Mocha.warning)
+                            .frame(width: 12, height: 12)
+                            .background(Mocha.selected, in: Circle())
+                    }
+                }
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            if expanded {
                 Text(group.name)
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if collapsed, let selected {
-                    Text(selected.name)
-                        .font(.system(size: 11))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if selected != nil {
+                    Circle().fill(Mocha.blue).frame(width: 5, height: 5).accessibilityHidden(true)
                 }
+                if hasIssue { ProjectStatusGlyphs.issueGlyph }
+                if hasOverdue { ProjectStatusGlyphs.overdueGlyph }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if selected != nil {
-                Circle().fill(Mocha.blue).frame(width: 5, height: 5).accessibilityHidden(true)
-            }
-            if hasIssue { ProjectStatusGlyphs.issueGlyph }
-            if hasOverdue { ProjectStatusGlyphs.overdueGlyph }
         }
-        .foregroundStyle(selected != nil ? Mocha.blue : Mocha.secondary)
-        .padding(.leading, 8)
-        .padding(.trailing, 3)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+        .foregroundStyle(Mocha.secondary)
+        .padding(.leading, 6)
+        .padding(.trailing, expanded ? 3 : 6)
+        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -477,7 +531,7 @@ private struct SidebarMenuStyle: ViewModifier {
     let label: String
     func body(content: Content) -> some View {
         content.menuStyle(.borderlessButton).menuIndicator(.hidden)
-            .fixedSize().frame(width: 26)
+            .fixedSize().frame(width: 24)
             .accessibilityLabel(label).help(label)
     }
 }
@@ -485,13 +539,8 @@ private struct SidebarMenuStyle: ViewModifier {
 private struct ProjectStatusGlyphs: View {
     @ObservedObject var model: AppModel
     let project: Project
-    var showsLocation = false
     var body: some View {
         HStack(spacing: 4) {
-            if showsLocation && ProjectPresentation.isExternal(project.id, model: model) {
-                Image(systemName: "folder")
-                    .font(.system(size: 11)).foregroundStyle(Mocha.secondary).accessibilityHidden(true)
-            }
             if model.issue(for: project.id) != nil { Self.issueGlyph }
             if model.hasOverdueTasks(projectID: project.id) { Self.overdueGlyph }
         }
@@ -508,17 +557,29 @@ private struct ProjectStatusGlyphs: View {
 
 @MainActor
 private enum ProjectPresentation {
-    static func isExternal(_ id: String, model: AppModel) -> Bool {
-        model.location(for: id).map { !$0.isManaged } ?? false
+    static func monogram(_ name: String) -> String {
+        let words = name.split(whereSeparator: { $0.isWhitespace })
+        guard let first = words.first else { return "?" }
+        let initials = words.count > 1
+            ? Array(first.prefix(1)) + Array(words[1].prefix(1))
+            : Array(first.prefix(2))
+        return initials.map { character in
+            let uppercase = String(character).uppercased()
+            return uppercase.count == 1 ? uppercase : String(character)
+        }.joined()
     }
+
     static func description(_ project: Project, model: AppModel) -> String {
         var description = project.name
+        if let groupID = project.groupID,
+           let group = model.workspace.groups.first(where: { $0.id == groupID }) {
+            description += ", group \(group.name)"
+        } else { description += ", ungrouped" }
         if let issue = model.issue(for: project.id) {
             description += issue.isMissing ? ", file not found" : ", list needs attention"
         }
         if model.hasOverdueTasks(projectID: project.id) { description += ", contains overdue tasks" }
-        guard let location = model.location(for: project.id) else { return description }
-        return "\(description), \(location.isManaged ? "saved in app" : "saved in folder"), \(location.url.path)"
+        return description
     }
 }
 

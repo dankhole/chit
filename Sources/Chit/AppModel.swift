@@ -70,11 +70,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var workspace = Workspace()
     @Published var selectedProjectID = "" { didSet { persistPreferences() } }
     @Published var collapsedGroupIDs: Set<String> = [] { didSet { persistPreferences() } }
-    @Published private(set) var sidebarDockedOpen = true { didSet { persistPreferences() } }
-    @Published private(set) var sidebarWidth = 240.0 { didSet { persistPreferences() } }
-    // Drawer visibility is transient and must never replace the wide-window preference.
-    @Published private(set) var sidebarDrawerOpen = false
-    @Published private(set) var sidebarIsDocked = false
+    @Published private(set) var sidebarExpanded = false { didSet { persistPreferences() } }
+    @Published private(set) var sidebarExpandedWidth = 176.0 { didSet { persistPreferences() } }
     @Published var expandedTaskIDs: [String: String] = [:] { didSet { persistPreferences() } }
     @Published private(set) var selectedTaskIDs: [String: String] = [:]
     @Published private(set) var expandedCompletedProjectIDs: Set<String> = [] { didSet { persistPreferences() } }
@@ -107,7 +104,6 @@ final class AppModel: ObservableObject {
     private static let backgroundOpacityKey = "appearance.backgroundOpacity"
     private static let completedCompositionMessage = "Finish the current text composition before hiding completed tasks."
     private static let removeCompositionMessage = "Finish the current text composition before hiding this list."
-    private static let sidebarCompositionMessage = "Finish the current text composition before opening the sidebar."
 
     init(store: TodoStore = TodoStore(), preferences: UserDefaults = .standard, watchChanges: Bool = true) {
         self.store = store
@@ -122,9 +118,11 @@ final class AppModel: ObservableObject {
         let saved = preferences.dictionary(forKey: preferenceKey) ?? [:]
         selectedProjectID = saved["selectedProjectID"] as? String ?? ""
         collapsedGroupIDs = Set(saved["collapsedGroupIDs"] as? [String] ?? [])
-        sidebarDockedOpen = saved["sidebarDockedOpen"] as? Bool ?? true
-        if let width = saved["sidebarWidth"] as? NSNumber, width.doubleValue.isFinite {
-            sidebarWidth = min(320, max(200, width.doubleValue))
+        // The compact rail replaces the old width/breakpoint preferences. A
+        // prior docked or drawer state does not opt into the new expansion.
+        sidebarExpanded = saved["sidebarExpanded"] as? Bool ?? false
+        if let width = saved["sidebarExpandedWidth"] as? NSNumber, width.doubleValue.isFinite {
+            sidebarExpandedWidth = min(280, max(160, width.doubleValue))
         }
         expandedTaskIDs = saved["expandedTaskIDs"] as? [String: String] ?? [:]
         expandedCompletedProjectIDs = Set(saved["expandedCompletedProjectIDs"] as? [String] ?? [])
@@ -204,51 +202,13 @@ final class AppModel: ObservableObject {
         preferences.set(opacity, forKey: Self.backgroundOpacityKey)
     }
 
-    var sidebarVisible: Bool { sidebarIsDocked ? sidebarDockedOpen : sidebarDrawerOpen }
+    func toggleSidebar() { sidebarExpanded.toggle() }
 
-    func updateSidebarLayout(availableWidth: CGFloat) {
-        let docked = availableWidth >= 640
-        guard sidebarIsDocked != docked else { return }
-        // A drawer always starts closed on entry to narrow mode. Crossing this
-        // breakpoint never overwrites the user's docked visibility or width.
-        sidebarDrawerOpen = false
-        sidebarIsDocked = docked
-    }
-
-    @discardableResult
-    func toggleSidebar() -> Bool {
-        if sidebarIsDocked {
-            sidebarDockedOpen.toggle()
-            return true
-        }
-        if sidebarDrawerOpen {
-            dismissSidebarDrawer()
-            return true
-        }
-        return showSidebarDrawer()
-    }
-
-    @discardableResult
-    func showSidebarDrawer() -> Bool {
-        guard !sidebarIsDocked else { return false }
-        // Opening a modal drawer changes keyboard focus. Keep unpublished IME
-        // text in its owning editor until composition has finished.
-        guard !hasActiveTextComposition else {
-            errorMessage = Self.sidebarCompositionMessage
-            return false
-        }
-        if errorMessage == Self.sidebarCompositionMessage { errorMessage = nil }
-        sidebarDrawerOpen = true
-        return true
-    }
-
-    func dismissSidebarDrawer() { sidebarDrawerOpen = false }
-
-    func setSidebarWidth(_ value: Double) {
+    func setSidebarExpandedWidth(_ value: Double) {
         guard value.isFinite else { return }
-        let width = min(320, max(200, value))
-        guard width != sidebarWidth else { return }
-        sidebarWidth = width
+        let width = min(280, max(160, value))
+        guard width != sidebarExpandedWidth else { return }
+        sidebarExpandedWidth = width
     }
 
     func isCompletedExpanded(projectID: String) -> Bool {
@@ -400,10 +360,15 @@ final class AppModel: ObservableObject {
         } catch { report(error) }
     }
 
-    func selectProject(_ id: String) {
-        guard workspace.projects.contains(where: { $0.id == id }) else { return }
+    @discardableResult
+    func selectProject(_ id: String) -> Bool {
+        guard workspace.projects.contains(where: { $0.id == id }) else { return false }
+        // Switching tears down the old list's editors. Provisional IME text
+        // belongs to its native editor until composition has finished.
+        guard !hasActiveTextComposition else { return false }
         _ = flushPendingEdits()
         selectedProjectID = id
+        return true
     }
 
     func toggleGroup(_ id: String) {
@@ -1188,8 +1153,8 @@ final class AppModel: ObservableObject {
         var values: [String: Any] = [
             "selectedProjectID": selectedProjectID,
             "collapsedGroupIDs": Array(collapsedGroupIDs),
-            "sidebarDockedOpen": sidebarDockedOpen,
-            "sidebarWidth": sidebarWidth,
+            "sidebarExpanded": sidebarExpanded,
+            "sidebarExpandedWidth": sidebarExpandedWidth,
             "expandedTaskIDs": expandedTaskIDs,
             "expandedCompletedProjectIDs": Array(expandedCompletedProjectIDs),
             "entryDrafts": entryDrafts

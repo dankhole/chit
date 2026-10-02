@@ -11,9 +11,8 @@ struct ContentView: View {
     @State private var recoveryListID = ""
 
     var body: some View {
-        GeometryReader { geometry in
-            let layout = SidebarLayout(availableWidth: geometry.size.width, preferredWidth: model.sidebarWidth,
-                                       dockedOpen: model.sidebarDockedOpen, drawerOpen: model.sidebarDrawerOpen)
+        GeometryReader { _ in
+            let layout = SidebarLayout(expanded: model.sidebarExpanded, preferredWidth: model.sidebarExpandedWidth)
             VStack(spacing: 0) {
                 if displaysCatalogRecovery {
                     CatalogRecoveryHeader()
@@ -22,9 +21,9 @@ struct ContentView: View {
                         .padding(.horizontal, 10)
                     CatalogRecoveryView(model: model)
                 } else {
-                    ProjectHeader(model: model, sidebarVisible: layout.sidebarVisible, onToggleSidebar: {
-                        _ = model.toggleSidebar()
-                    }, onNewList: presentNewList)
+                    ProjectHeader(model: model, sidebarExpanded: model.sidebarExpanded, onToggleSidebar: {
+                        model.toggleSidebar()
+                    })
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                     Rectangle().fill(Mocha.secondary.opacity(0.13)).frame(height: 1)
@@ -32,13 +31,11 @@ struct ContentView: View {
                     adaptiveWorkspace(layout: layout)
                 }
             }
-            .onAppear { model.updateSidebarLayout(availableWidth: geometry.size.width) }
-            .onChange(of: geometry.size.width) { _, width in model.updateSidebarLayout(availableWidth: width) }
         }
         .foregroundStyle(Mocha.text)
         .tint(Mocha.blue)
         .preferredColorScheme(.dark)
-        .frame(minWidth: 300, minHeight: 180)
+        .frame(minWidth: SidebarLayout.minimumCollapsedWindowWidth, minHeight: 180)
         .onReceive(NotificationCenter.default.publisher(for: NSText.didChangeNotification)) { _ in
             compositionInProgress = selectedEditorHasMarkedText
         }
@@ -46,7 +43,6 @@ struct ContentView: View {
             compositionInProgress = selectedEditorHasMarkedText
         }
         .onReceive(NotificationCenter.default.publisher(for: HeaderDragView.blankClick)) { _ in
-            guard !model.sidebarDrawerOpen else { return }
             _ = model.clearTaskSelection()
         }
         .sheet(isPresented: $newListPresented) {
@@ -54,9 +50,6 @@ struct ContentView: View {
         }
         .onChange(of: model.errorMessage, initial: true) { _, _ in refreshRecoveryBackups() }
         .onChange(of: model.selectedProjectID) { _, _ in
-            // Creating or opening a list also selects it; reveal its tasks just
-            // as a selection from a drawer row does.
-            model.dismissSidebarDrawer()
             refreshRecoveryBackups()
         }
         .onChange(of: model.selectedListIssue) { _, _ in refreshRecoveryBackups() }
@@ -76,34 +69,26 @@ struct ContentView: View {
             taskWorkspace
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.leading, layout.taskInset)
-                .disabled(layout.drawerVisible)
-                .environment(\.sidebarBlocksTextInput, layout.drawerVisible)
-                .allowsHitTesting(!layout.drawerVisible)
-                .accessibilityHidden(layout.drawerVisible)
                 .accessibilityIdentifier("task-workspace")
-            Color.black.opacity(layout.drawerVisible ? 0.18 : 0)
-                .allowsHitTesting(layout.drawerVisible)
-                .onTapGesture { model.dismissSidebarDrawer() }
-                .accessibilityHidden(true)
-            ProjectSidebar(model: model, onNewList: presentNewList, onSelect: model.dismissSidebarDrawer)
+            ProjectSidebar(model: model, onNewList: presentNewList)
                 .frame(width: layout.sidebarWidth)
                 .frame(maxHeight: .infinity, alignment: .topLeading)
-                .background(Color(red: 30 / 255, green: 30 / 255, blue: 46 / 255)
-                    .opacity(layout.isDocked ? 0.25 : 1))
-                .background(SidebarModalBoundary(model: model, active: layout.drawerVisible))
-                .opacity(layout.sidebarVisible ? 1 : 0)
-                .allowsHitTesting(layout.sidebarVisible)
-                .disabled(!layout.sidebarVisible)
-                .accessibilityHidden(!layout.sidebarVisible)
+                .background(Color(red: 30 / 255, green: 30 / 255, blue: 46 / 255).opacity(0.25))
+                .background(SidebarInteractionBoundary(onBlankToggle: model.toggleSidebar))
                 .accessibilityIdentifier("list-sidebar")
-            SidebarResizeDivider(model: model, availableWidth: layout.availableWidth,
-                                 actualWidth: layout.sidebarWidth)
+            Rectangle().fill(Mocha.secondary.opacity(0.13))
                 .frame(width: SidebarLayout.dividerWidth)
                 .frame(maxHeight: .infinity)
                 .offset(x: layout.sidebarWidth)
-                .opacity(layout.isDocked && layout.sidebarVisible ? 1 : 0)
-                .allowsHitTesting(layout.isDocked && layout.sidebarVisible)
-                .accessibilityHidden(!layout.isDocked || !layout.sidebarVisible)
+                .opacity(model.sidebarExpanded ? 0 : 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            SidebarResizeDivider(model: model)
+                .frame(width: SidebarResizeDivider.hitWidth)
+                .frame(maxHeight: .infinity)
+                .offset(x: layout.sidebarWidth + SidebarLayout.dividerWidth / 2 - SidebarResizeDivider.hitWidth / 2)
+                .opacity(model.sidebarExpanded ? 1 : 0)
+                .accessibilityHidden(!model.sidebarExpanded)
         }
         .clipped()
     }

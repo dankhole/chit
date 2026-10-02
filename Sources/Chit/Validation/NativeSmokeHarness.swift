@@ -29,7 +29,6 @@ final class NativeSmokeHarness {
         model.addTask(title)
         guard let task = model.selectedProject?.tasks.first(where: { $0.title == title }) else { throw harnessError("Could not create native editor smoke task.") }
         model.toggleDetails(taskID: task.id)
-        try await Task.sleep(nanoseconds: 250_000_000)
         try await exerciseDeadlineMenus(taskID: task.id)
         try await exerciseNativeEditor(taskID: task.id, title: title)
         if let task = model.selectedProject?.tasks.first(where: { $0.id == task.id }) { model.deleteTask(task) }
@@ -105,33 +104,38 @@ final class NativeSmokeHarness {
         }
         let selected = model.selectedProjectID
         let originalSize = panel.contentRect(forFrameRect: panel.frame).size
-        let originalSidebarOpen = model.sidebarDockedOpen
+        let originalSidebarOpen = model.sidebarExpanded
         let group = ProjectGroup(name: "Smoke drop group")
+        let laterGroup = ProjectGroup(name: "Smoke later group")
         let anchor = Project(name: "Smoke anchor")
         let source = Project(name: "Smoke draggable")
+        let laterProject = Project(name: "Smoke later list", groupID: laterGroup.id)
         let scrollProjects = (1...12).map { Project(name: "Smoke scroll \($0)") }
-        let fixtureIDs = Set([anchor.id, source.id] + scrollProjects.map(\.id))
+        let fixtureIDs = Set([anchor.id, source.id, laterProject.id] + scrollProjects.map(\.id))
         _ = try model.store.apply(.batch([
             .addGroup(group: group, index: nil),
+            .addGroup(group: laterGroup, index: nil),
             .addProject(project: anchor, index: nil),
             .addProject(project: source, index: nil)
-        ] + scrollProjects.map { .addProject(project: $0, index: nil) }))
+        ] + scrollProjects.map { .addProject(project: $0, index: nil) } + [.addProject(project: laterProject, index: nil)]))
         defer {
             if let latest = try? model.store.load() {
                 let projects = latest.projects.filter { fixtureIDs.contains($0.id) }
-                _ = try? model.store.apply(.batch(projects.map { .deleteProject(id: $0.id, expected: $0) } + [.deleteEmptyGroup(id: group.id, expected: group)]))
+                _ = try? model.store.apply(.batch(projects.map { .deleteProject(id: $0.id, expected: $0) } + [
+                    .deleteEmptyGroup(id: group.id, expected: group),
+                    .deleteEmptyGroup(id: laterGroup.id, expected: laterGroup)
+                ]))
             }
             model.refresh()
             model.selectProject(selected)
-            if model.sidebarDockedOpen != originalSidebarOpen { _ = model.toggleSidebar() }
+            if model.sidebarExpanded != originalSidebarOpen { model.toggleSidebar() }
             panel.setContentSize(originalSize)
         }
         model.refresh()
         panel.setContentSize(NSSize(width: 760, height: 350))
-        model.updateSidebarLayout(availableWidth: 760)
-        if !model.sidebarDockedOpen { _ = model.toggleSidebar() }
+        if !model.sidebarExpanded { model.toggleSidebar() }
         try await Task.sleep(nanoseconds: 150_000_000)
-        let anchorView = try target(.tab(anchor.id))
+        var anchorView = try target(.tab(anchor.id))
         guard let state = anchorView.dragState else { throw harnessError("Native project drag state was not connected.") }
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally(); state.finish() }
@@ -167,6 +171,26 @@ final class NativeSmokeHarness {
         }
         try check(sidebarScroll !== taskScroll, "Sidebar rows share the task pane's scroll view.")
         let clip = sidebarScroll.contentView
+        func navigationFrames() -> [String: NSRect] {
+            root.layoutSubtreeIfNeeded()
+            return Dictionary(uniqueKeysWithValues: descendants(root).compactMap { view in
+                guard let row = view as? ProjectDragView else { return nil }
+                let key: String
+                switch row.destination {
+                case .tab(let id): key = "list:" + id
+                case .group(let id): key = "group:" + (id ?? "create")
+                }
+                return (key, row.convert(row.bounds, to: nil))
+            })
+        }
+        func checkNavigationGeometry(_ previous: [String: NSRect], scrollOrigin: NSPoint) throws {
+            let current = navigationFrames()
+            try check(Set(current.keys) == Set(previous.keys) && current.allSatisfy { key, frame in
+                guard let old = previous[key] else { return false }
+                return abs(frame.midY - old.midY) < 1 && abs(frame.height - old.height) < 1
+            } && clip.bounds.origin == scrollOrigin,
+            "Toggling names changed navigation rows, vertical positions, heights, or scroll offset.")
+        }
         let originalScroll = clip.bounds.origin
         let originalTaskScroll = taskScroll.contentView.bounds.origin
         try beginDrag()
@@ -181,7 +205,7 @@ final class NativeSmokeHarness {
         }
         anchorView.scrollWheel(with: wheelEvent)
         try await Task.sleep(nanoseconds: 100_000_000)
-        try check(clip.bounds.origin != afterEdgeScroll && taskScroll.contentView.bounds.origin == originalTaskScroll,
+        try check(clip.bounds.origin != afterEdgeScroll && taskScroll.contentView.bounds.origin == originalTaskScroll && model.sidebarExpanded,
                   "Wheel scrolling over a native sidebar row did not scroll only its own pane.")
         state.finish()
         clip.scroll(to: originalScroll)
@@ -193,10 +217,49 @@ final class NativeSmokeHarness {
         try check(groupView.performDrop(pasteboard: pasteboard, location: NSPoint(x: groupView.bounds.midX, y: groupView.bounds.midY)), "Dropping into a collapsed group failed.")
         try check(model.workspace.projects.first(where: { $0.id == source.id })?.groupID == group.id && model.collapsedGroupIDs.contains(group.id),
                   "Group drop did not preserve the collapsed group state.")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let collapsedGroupFrames = navigationFrames()
+        let beforeCollapseOffset = clip.bounds.origin
+        try check(collapsedGroupFrames["list:" + source.id] == nil && collapsedGroupFrames["list:" + laterProject.id] != nil,
+                  "The collapsed-group fixture did not hide its child or mount the later list.")
+        model.toggleSidebar()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try checkNavigationGeometry(collapsedGroupFrames, scrollOrigin: beforeCollapseOffset)
+        let railAnchor = try target(.tab(anchor.id))
+        let createRow = try target(.group(nil))
+        let railIDs = Set(descendants(root).compactMap { ($0 as? ProjectDragView)?.sourceProject?.id })
+        let visibleIDs = Set(model.workspace.projects.filter {
+            $0.groupID.map { !model.collapsedGroupIDs.contains($0) } ?? true
+        }.map(\.id))
+        try check(railIDs == visibleIDs && !railAnchor.draggingEnabled &&
+                  abs(createRow.bounds.height - 32) < 1 && createRow.toolTip?.contains("Create List") == true,
+                  "The compact rail changed group visibility, enabled dragging, or lost its fixed Create List row.")
+        try beginDrag()
+        try check(railAnchor.updateDrop(pasteboard: pasteboard, location: .zero).isEmpty &&
+                  !railAnchor.performDrop(pasteboard: pasteboard, location: .zero),
+                  "The compact rail accepted a list drop.")
+        state.finish()
+        try await clickSidebarRow(railAnchor)
+        try check(model.selectedProjectID == anchor.id && model.collapsedGroupIDs.contains(group.id) && !model.sidebarExpanded,
+                  "A compact rail row click changed sidebar mode or the group's fold state.")
+        let railGroup = try target(.group(group.id))
+        railGroup.scrollToVisible(railGroup.bounds)
+        try await clickNativeSidebarControl(railGroup)
+        try check(!model.collapsedGroupIDs.contains(group.id), "The compact rail group heading did not unfold its lists.")
+        let unfoldedGroupFrames = navigationFrames()
+        try check(unfoldedGroupFrames["list:" + source.id] != nil, "The rail group heading did not reveal its child row.")
+        model.selectProject(selected)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let beforeNamesFrames = navigationFrames()
+        let beforeNamesOffset = clip.bounds.origin
+        model.toggleSidebar()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try checkNavigationGeometry(beforeNamesFrames, scrollOrigin: beforeNamesOffset)
+        anchorView = try target(.tab(anchor.id))
         try beginDrag()
         try await Task.sleep(nanoseconds: 100_000_000)
         let ungroupView = try target(.group(nil))
-        try check(ungroupView.performDrop(pasteboard: pasteboard, location: NSPoint(x: ungroupView.bounds.midX, y: ungroupView.bounds.midY)), "Temporary Ungroup target rejected a project.")
+        try check(ungroupView.performDrop(pasteboard: pasteboard, location: NSPoint(x: ungroupView.bounds.midX, y: ungroupView.bounds.midY)), "The expanded Create List/Ungroup target rejected a project.")
         try check(model.workspace.projects.first(where: { $0.id == source.id })?.groupID == nil, "Ungroup drop did not save.")
         try beginDrag()
         let foreign = ProjectDragPayload(workspaceScope: UUID().uuidString, projectID: source.id, sourceGroupID: nil, expectedOrder: model.workspace.projects.map(\.id))
@@ -451,6 +514,13 @@ final class NativeSmokeHarness {
         func titlePoint(_ x: CGFloat = 40) -> NSPoint {
             title.convert(NSPoint(x: x, y: title.textContainerInset.height + 8), to: nil)
         }
+        func taskMarginPoint(trailing: Bool = false) throws -> NSPoint {
+            guard let bar = descendants(root).compactMap({ $0 as? TaskBarClickRegion }).first(where: { $0.taskID == task.id }) else {
+                throw harnessError("The task bar bounds were unavailable for native margin clicks.")
+            }
+            let frame = bar.convert(bar.bounds, to: nil)
+            return NSPoint(x: trailing ? frame.maxX - 8 : frame.minX + 8, y: titlePoint().y)
+        }
         func clickState() -> String {
             let responder = (panel.firstResponder as? PlainTextView)?.editorIdentity
                 ?? panel.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
@@ -513,7 +583,7 @@ final class NativeSmokeHarness {
                   "Clicking notes toggled task details or failed to focus its native editor.")
         notes.setSelectedRange(NSRange(location: (notes.string as NSString).length, length: 0))
         notes.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: notes.selectedRange())
-        try await click(NSPoint(x: 8, y: titlePoint().y))
+        try await click(taskMarginPoint())
         try check(notes.hasMarkedText() && panel.firstResponder === notes && model.expandedTaskID == task.id,
                   "A task bar click collapsed details or moved focus away from notes during native composition.")
         notes.insertText("あ", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -545,28 +615,77 @@ final class NativeSmokeHarness {
         if installedBlankTrace { title.onTitleFocus = blankFocusToRestore }
         try check(model.selectedTaskIDs[project.id] == nil && model.expandedTaskID == nil,
                   "Blank list space outside task bars did not reset selection and collapse details. Before: \(beforeBlankClick). After: \(clickState()); \(blankClassification); callbacks: \(blankTrace); delivered: \(deliveredEvents.suffix(6)).")
-        for x in [CGFloat(8), root.bounds.width - 8] {
-            let margin = NSPoint(x: x, y: titlePoint().y)
+        for trailing in [false, true] {
+            let margin = try taskMarginPoint(trailing: trailing)
             try await click(margin)
             try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
-                      "The task bar margin at x=\(x) did not select without expanding. \(clickState()).")
+                      "The task bar margin at x=\(margin.x) did not select without expanding. \(clickState()).")
             try await click(margin)
             try check(model.expandedTaskID == task.id,
-                      "The selected task bar margin at x=\(x) did not toggle details within 80ms. \(clickState()).")
+                      "The selected task bar margin at x=\(margin.x) did not toggle details within 80ms. \(clickState()).")
             try await sendMouse([(.leftMouseDown, margin, 2), (.leftMouseUp, margin, 2)])
             try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
-                      "A rapid repeated background click at x=\(x) did not toggle the selected task bar.")
+                      "A rapid repeated background click at x=\(margin.x) did not toggle the selected task bar.")
             try await click(blank)
             try check(model.selectedTaskIDs[project.id] == nil && model.expandedTaskID == nil,
                       "Blank space outside task bars did not collapse a margin-selected task.")
         }
+        do {
+            guard let rail = descendants(root).compactMap({ $0 as? ProjectDragView }).first(where: { $0.destination == .tab(project.id) }),
+                  let sidebarRoute = panel.sidebarEventDisposition else {
+                throw harnessError("Native navigation was unavailable for task-pointer pairing checks.")
+            }
+            rail.scrollToVisible(rail.bounds)
+            root.layoutSubtreeIfNeeded()
+            let railPoint = rail.convert(NSPoint(x: rail.bounds.midX, y: rail.bounds.midY), to: nil)
+            var routedContinuationEvents = 0
+            panel.sidebarEventDisposition = { event in
+                if event.type == .leftMouseDragged || event.type == .leftMouseUp { routedContinuationEvents += 1 }
+                return sidebarRoute(event)
+            }
+            defer { panel.sidebarEventDisposition = sidebarRoute }
+            func pointer(_ type: NSEvent.EventType, at point: NSPoint) throws {
+                eventNumber += 1
+                guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                    context: nil, eventNumber: eventNumber, clickCount: 1,
+                    pressure: type == .leftMouseUp ? 0 : 1) else {
+                    throw harnessError("Could not create the cross-sidebar task pointer sequence.")
+                }
+                panel.sendEvent(event)
+            }
+            try await click(taskMarginPoint())
+            routedContinuationEvents = 0
+            try pointer(.leftMouseDown, at: taskMarginPoint())
+            try pointer(.leftMouseDragged, at: railPoint)
+            try pointer(.leftMouseUp, at: railPoint)
+            try check(routedContinuationEvents == 0 && model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
+                      "A task press lost ownership of its drag/release over the rail or spuriously toggled details.")
+            // An abandoned task down must also be cleared by a fresh rail down.
+            try pointer(.leftMouseDown, at: taskMarginPoint())
+            try await clickSidebarRow(rail)
+            routedContinuationEvents = 0
+            try pointer(.leftMouseDragged, at: railPoint)
+            try pointer(.leftMouseUp, at: railPoint)
+            try check(routedContinuationEvents == 2 && model.selectedProjectID == project.id && model.expandedTaskID == nil,
+                      "A fresh rail press retained a stale task capture and consumed later pointer events.")
+            let beforeResize = panel.frame
+            try await clickSidebarToggle()
+            panel.setContentSize(NSSize(width: beforeResize.width + 20, height: beforeResize.height))
+            panel.setFrame(beforeResize, display: true)
+            try await clickSidebarToggle()
+            try check(!model.sidebarExpanded && model.expandedTaskID == nil && descendants(root).contains(where: { $0 === title }),
+                      "Navigation and resize after the cross-sidebar pointer sequence changed task details or replaced the editor.")
+            print("Task pointer pairing passed across the rail, including stale-press reset and subsequent navigation/resize.")
+        }
+        try await click(blank)
         try await click(titlePoint())
         try check(model.selectedTaskIDs[project.id] == task.id && model.expandedTaskID == nil,
                   "First click after blank-space reset expanded task details.")
         title.setSelectedRange(NSRange(location: (title.string as NSString).length, length: 0))
         title.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: title.selectedRange())
         func titleCompositionState() -> String {
-            "\(clickState()), title=\(title.string.debugDescription), titleMarked=\(title.hasMarkedText()), titleSelection=\(NSStringFromRange(title.selectedRange())), titleEditable=\(title.isEditable), titleSelectable=\(title.isSelectable), titleWindow=\(title.window?.windowNumber ?? -1), panel=\(panel.windowNumber), keyWindow=\(NSApp.keyWindow?.windowNumber ?? -1), selectedProject=\(model.selectedProjectID), sidebarDocked=\(model.sidebarIsDocked), sidebarOpen=\(model.sidebarDockedOpen), drawerOpen=\(model.sidebarDrawerOpen)"
+            "\(clickState()), title=\(title.string.debugDescription), titleMarked=\(title.hasMarkedText()), titleSelection=\(NSStringFromRange(title.selectedRange())), titleEditable=\(title.isEditable), titleSelectable=\(title.isSelectable), titleWindow=\(title.window?.windowNumber ?? -1), panel=\(panel.windowNumber), keyWindow=\(NSApp.keyWindow?.windowNumber ?? -1), selectedProject=\(model.selectedProjectID), sidebarExpanded=\(model.sidebarExpanded)"
         }
         let beforeBlankCompositionClick = titleCompositionState()
         try check(title.hasMarkedText() && model.selectedTaskIDs[project.id] == task.id && panel.firstResponder === title,
@@ -630,6 +749,32 @@ final class NativeSmokeHarness {
                   "The selected task's chevron did not open its empty details.")
     }
 
+    private func waitForExpandedTaskEditors(taskID: String) async throws -> [PlainTextView] {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        guard let root = panel.contentView,
+              model.selectedProject?.tasks.contains(where: { $0.id == taskID }) == true else {
+            throw harnessError("Could not prepare the expected expanded native task editors.")
+        }
+        let projectID = model.selectedProjectID
+        let expectedEditorIDs = Set(["\(taskID):title", "\(taskID):notes"])
+        let mountLimit = ProcessInfo.processInfo.systemUptime + 2
+        var editors: [PlainTextView] = []
+        while true {
+            root.layoutSubtreeIfNeeded()
+            let mounted = descendants(root).compactMap { $0 as? PlainTextView }
+            editors = mounted.filter { expectedEditorIDs.contains($0.editorIdentity) }
+            if model.selectedProjectID == projectID, model.selectedTaskID == taskID,
+               model.expandedTaskID == taskID, editors.count == 2,
+               Set(editors.map(\.editorIdentity)) == expectedEditorIDs,
+               editors.allSatisfy({ $0.window === panel }) { return editors }
+            let remaining = mountLimit - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else {
+                throw harnessError("Task title and notes editors were not mounted for the selected, expanded task within 2 seconds (project=\(model.selectedProjectID), expectedProject=\(projectID), selectedTask=\(String(describing: model.selectedTaskID)), expandedTask=\(String(describing: model.expandedTaskID)), expectedTask=\(taskID), mounted=\(mounted.map(\.editorIdentity)), size=\(panel.contentRect(forFrameRect: panel.frame).size), minimum=\(panel.minSize), sidebarExpanded=\(model.sidebarExpanded)).")
+            }
+            try await Task.sleep(nanoseconds: UInt64(min(0.05, remaining) * 1_000_000_000))
+        }
+    }
+
     private func exerciseDeadlineMenus(taskID: String) async throws {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         guard let root = panel.contentView,
@@ -639,10 +784,7 @@ final class NativeSmokeHarness {
                   context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else {
             throw harnessError("Could not prepare deadline menu check.")
         }
-        let editors = descendants(root).compactMap { $0 as? PlainTextView }.filter {
-            $0.editorIdentity == "\(taskID):title" || $0.editorIdentity == "\(taskID):notes"
-        }
-        guard editors.count == 2 else { throw harnessError("Deadline title and notes editors were not mounted.") }
+        let editors = try await waitForExpandedTaskEditors(taskID: taskID)
         func waitForDeadlinePopup(_ phase: String) async throws -> NSWindow {
             let limit = ProcessInfo.processInfo.systemUptime + 2
             while true {
@@ -773,19 +915,16 @@ final class NativeSmokeHarness {
         try check(editor.string == title && model.text(itemID: taskID, field: .title, fallback: title) == title, "Native text Undo did not restore the draft (editor=\(editor.string), draft=\(model.text(itemID: taskID, field: .title, fallback: title))).")
         try check(NSApp.sendAction(Selector(("redo:")), to: nil, from: delegate), "Native responder rejected Redo.")
         try check(editor.string == typed, "Native text Redo did not restore the edit.")
-        let originalSize = panel.contentRect(forFrameRect: panel.frame).size
-        let originalSidebarOpen = model.sidebarDockedOpen
-        let originalSidebarWidth = model.sidebarWidth
+        let originalFrame = panel.frame
+        let originalSize = panel.contentRect(forFrameRect: originalFrame).size
+        let originalSidebarOpen = model.sidebarExpanded
+        let originalSidebarWidth = model.sidebarExpandedWidth
         defer {
-            model.dismissSidebarDrawer()
-            model.setSidebarWidth(originalSidebarWidth)
-            if model.sidebarDockedOpen != originalSidebarOpen {
-                model.updateSidebarLayout(availableWidth: 900)
-                _ = model.toggleSidebar()
-            }
-            panel.setContentSize(originalSize)
-            model.updateSidebarLayout(availableWidth: originalSize.width)
+            model.setSidebarExpandedWidth(originalSidebarWidth)
+            if model.sidebarExpanded != originalSidebarOpen { model.toggleSidebar() }
+            panel.setFrame(originalFrame, display: true)
         }
+        if model.sidebarExpanded { model.toggleSidebar() }
         editor.breakUndoCoalescing()
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
         editor.insertText("\nResize this multiline title while keeping its native editor, selection, and Undo history intact. The following notes must stay below every wrapped line.", replacementRange: editor.selectedRange())
@@ -793,9 +932,10 @@ final class NativeSmokeHarness {
         panel.setContentSize(NSSize(width: 320, height: 600))
         try await Task.sleep(nanoseconds: 150_000_000)
         panel.contentView?.layoutSubtreeIfNeeded()
-        guard let notes = descendants(root).compactMap({ $0 as? PlainTextView }).first(where: { $0.editorIdentity == "\(taskID):notes" }),
+        let mountedEditors = descendants(root).compactMap { $0 as? PlainTextView }
+        guard let notes = mountedEditors.first(where: { $0.editorIdentity == "\(taskID):notes" }),
               let container = editor.textContainer, let layout = editor.layoutManager else {
-            throw harnessError("Native editor resize check could not find its notes or text layout.")
+            throw harnessError("Native editor resize check could not find its notes or text layout (project=\(model.selectedProjectID), expandedTask=\(String(describing: model.expandedTaskID)), selectedTask=\(String(describing: model.selectedTaskIDs[model.selectedProjectID])), expectedNotes=\(taskID):notes, mounted=\(mountedEditors.map(\.editorIdentity)), editorMounted=\(mountedEditors.contains { $0 === editor }), editorWindowMatches=\(editor.window === panel), textContainer=\(editor.textContainer != nil), layoutManager=\(editor.layoutManager != nil), size=\(panel.contentRect(forFrameRect: panel.frame).size), minimum=\(panel.minSize), sidebarExpanded=\(model.sidebarExpanded)).")
         }
         func checkEditorLayout() throws {
             layout.ensureLayout(for: container)
@@ -824,62 +964,107 @@ final class NativeSmokeHarness {
         try check(editor.string == typed, "Undo after resizing did not restore the native title.")
         editor.setSelectedRange(NSRange(location: 3, length: 4))
         let sidebarSelection = editor.selectedRange()
-        func checkSidebarEditor(_ phase: String, focused: Bool = true) throws {
-            try check(descendants(root).contains(where: { $0 === editor }) && editor.window === panel &&
-                      editor.selectedRange() == sidebarSelection && (!focused || panel.firstResponder === editor),
-                      "\(phase) replaced the task editor or changed its focus and selection.")
-            try check(editor.localUndo.canUndo, "\(phase) discarded native Undo history.")
+        func checkSidebarEditor(_ phase: String) throws {
+            let mounted = descendants(root).contains { $0 === editor }
+            let responder = panel.firstResponder.map { "\(type(of: $0)) \(ObjectIdentifier($0))" } ?? "nil"
+            try check(mounted && editor.window === panel &&
+                      editor.selectedRange() == sidebarSelection && panel.firstResponder === editor,
+                      "\(phase) replaced the task editor or changed its focus and selection (mounted=\(mounted), windowMatches=\(editor.window === panel), selection=\(editor.selectedRange()), expectedSelection=\(sidebarSelection), firstResponder=\(responder), editor=\(ObjectIdentifier(editor))).")
+            try check(editor.isEditable && editor.isSelectable && editor.localUndo.canUndo,
+                      "\(phase) disabled native editing or discarded Undo history.")
         }
-        panel.setContentSize(NSSize(width: 900, height: 600))
-        model.updateSidebarLayout(availableWidth: 900)
-        if !model.sidebarDockedOpen { _ = model.toggleSidebar() }
+        panel.setContentSize(NSSize(width: 760, height: 600))
         try await Task.sleep(nanoseconds: 100_000_000)
         root.layoutSubtreeIfNeeded()
-        let dockedEditorWidth = editor.bounds.width
-        try checkSidebarEditor("Docking the sidebar")
-        try check(model.toggleSidebar() && !model.sidebarDockedOpen, "The docked sidebar did not hide.")
+        let railFrame = panel.frame
+        let railEditorWidth = editor.bounds.width
+        let railEditorX = editor.convert(editor.bounds, to: nil).minX
+        model.toggleSidebar()
         try await Task.sleep(nanoseconds: 100_000_000)
         root.layoutSubtreeIfNeeded()
-        try check(editor.bounds.width > dockedEditorWidth + 150, "Hiding the docked sidebar did not return its space to the task editor.")
-        try checkSidebarEditor("Hiding the docked sidebar")
-        try check(model.toggleSidebar() && model.sidebarDockedOpen, "The docked sidebar did not reopen.")
-        model.setSidebarWidth(320)
+        try check(model.sidebarExpanded && panel.frame == railFrame &&
+                  abs(railEditorWidth - editor.bounds.width - 132) < 1 &&
+                  abs(editor.convert(editor.bounds, to: nil).minX - railEditorX - 132) < 1,
+                  "Expanding inline at a wide size did not push the existing editor by 132 points within the unchanged window.")
+        try checkSidebarEditor("Expanding the inline sidebar")
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        editor.breakUndoCoalescing()
+        editor.insertText(" expanded", replacementRange: editor.selectedRange())
+        editor.breakUndoCoalescing()
+        try check(editor.string == typed + " expanded" &&
+                  model.text(itemID: taskID, field: .title, fallback: title) == editor.string,
+                  "The expanded sidebar prevented native task editing.")
+        editor.localUndo.undo()
+        try check(editor.string == typed, "Undo while the sidebar was expanded did not restore the native title.")
+        editor.setSelectedRange(sidebarSelection)
+        model.toggleSidebar()
         try await Task.sleep(nanoseconds: 100_000_000)
         root.layoutSubtreeIfNeeded()
-        try checkSidebarEditor("Reopening and resizing the docked sidebar")
-        model.setSidebarWidth(originalSidebarWidth)
+        try check(!model.sidebarExpanded && panel.frame == railFrame && abs(editor.bounds.width - railEditorWidth) < 1,
+                  "Collapsing the sidebar did not return its space to the same editor.")
+        try checkSidebarEditor("Collapsing the inline sidebar")
+        try await clickSidebarBlank()
+        try check(model.sidebarExpanded, "An empty rail click did not expand the sidebar.")
+        try checkSidebarEditor("Expanding from empty rail space")
+        try await clickSidebarBlank()
+        try check(!model.sidebarExpanded, "An empty expanded-sidebar click did not collapse it.")
+        try checkSidebarEditor("Collapsing from empty sidebar space")
+        try await clickSidebarBlank(dragged: true)
+        try await clickSidebarBlank(rightClick: true)
+        try check(!model.sidebarExpanded, "A meaningful drag or right-click in empty rail space toggled the sidebar.")
+        try checkSidebarEditor("Ignoring non-click gestures in empty rail space")
         panel.setContentSize(NSSize(width: 424, height: 600))
-        model.updateSidebarLayout(availableWidth: 424)
         try await Task.sleep(nanoseconds: 100_000_000)
-        try check(model.showSidebarDrawer() && model.sidebarDrawerOpen, "The narrow sidebar drawer did not open.")
+        let narrowFrame = panel.frame
+        try check(abs(panel.minSize.width - 320) < 1, "The compact rail did not retain the 320-point window minimum.")
+        model.toggleSidebar()
         try await Task.sleep(nanoseconds: 100_000_000)
         root.layoutSubtreeIfNeeded()
-        try checkSidebarEditor("Opening the narrow sidebar drawer", focused: false)
-        try check(!editor.isEditable && !editor.isSelectable, "The open sidebar drawer left native task editing enabled behind it.")
-        guard let drawerEscape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
-            context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) else {
-            throw harnessError("Could not prepare sidebar drawer Escape event.")
-        }
-        panel.sendEvent(drawerEscape)
+        try check(abs(panel.contentRect(forFrameRect: panel.frame).width - 453) < 1 &&
+                  abs(panel.minSize.width - 453) < 1 &&
+                  abs(editor.convert(editor.bounds, to: nil).minX - railEditorX - 132) < 1,
+                  "Expanding a 424-point window did not grow only to the 453-point minimum with the expanded task inset.")
+        try checkSidebarEditor("Expanding the narrow inline sidebar")
+        model.toggleSidebar()
         try await Task.sleep(nanoseconds: 100_000_000)
-        try check(!model.sidebarDrawerOpen && editor.isEditable && editor.isSelectable,
-                  "Escape did not dismiss the sidebar drawer and restore task editing.")
-        try checkSidebarEditor("Dismissing the sidebar drawer with Escape")
-        try check(model.showSidebarDrawer(), "The sidebar drawer did not reopen after Escape.")
+        root.layoutSubtreeIfNeeded()
+        try check(panel.frame == narrowFrame && abs(panel.minSize.width - 320) < 1,
+                  "Collapsing an untouched auto-expanded window did not restore its original frame and minimum.")
+        try checkSidebarEditor("Restoring the narrow window")
+        model.toggleSidebar()
         try await Task.sleep(nanoseconds: 100_000_000)
-        let outsidePoint = editor.convert(NSPoint(x: editor.bounds.maxX - 4, y: editor.bounds.midY), to: nil)
-        guard let outsideDown = NSEvent.mouseEvent(with: .leftMouseDown, location: outsidePoint, modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
-            context: nil, eventNumber: 1, clickCount: 1, pressure: 1) else {
-            throw harnessError("Could not prepare sidebar drawer outside click.")
-        }
-        panel.sendEvent(outsideDown)
+        try await dragSidebarDivider(by: 32)
+        let dividerResizedFrame = panel.frame
+        let nativeDividerWidth = descendants(root).compactMap { $0 as? SidebarDividerView }.first(where: { $0.active })?.sidebarWidth
+        try check(abs(model.sidebarExpandedWidth - 208) < 1 && abs(panel.minSize.width - 485) < 1 &&
+                  abs(panel.contentRect(forFrameRect: panel.frame).width - 485) < 1 && nativeDividerWidth == 208,
+                  "Dragging the expanded divider did not update its width and grow the narrow window only to its new minimum.")
+        try checkSidebarEditor("Resizing the narrow sidebar divider")
+        model.toggleSidebar()
         try await Task.sleep(nanoseconds: 100_000_000)
-        try check(!model.sidebarDrawerOpen, "Clicking outside the narrow sidebar drawer did not dismiss it.")
-        try checkSidebarEditor("Dismissing the sidebar drawer with an outside click")
+        try check(panel.frame == dividerResizedFrame,
+                  "Collapsing after a manual divider resize restored the old auto-expanded frame.")
+        model.setSidebarExpandedWidth(176)
+        panel.setContentSize(NSSize(width: 424, height: 600))
+        model.toggleSidebar()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        panel.setContentSize(NSSize(width: 500, height: 600))
+        let userResizedFrame = panel.frame
+        model.toggleSidebar()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try check(panel.frame == userResizedFrame, "Collapsing the sidebar overwrote a manual window resize.")
+        panel.setContentSize(NSSize(width: 424, height: 600))
+        model.toggleSidebar()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let userMovedFrame = panel.frame
+        panel.setFrame(userMovedFrame.offsetBy(dx: 12, dy: 0), display: true)
+        panel.setFrame(userMovedFrame, display: true)
+        model.toggleSidebar()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
+        try check(panel.frame == userMovedFrame, "Collapsing the sidebar restored old geometry after a manual move away and back.")
+        try checkSidebarEditor("Preserving user-changed window geometry")
         panel.setContentSize(originalSize)
-        model.updateSidebarLayout(availableWidth: originalSize.width)
         try await Task.sleep(nanoseconds: 100_000_000)
         func currentPublishedTitle() throws -> String {
             guard let current = model.selectedProject?.tasks.first(where: { $0.id == taskID }) else {
@@ -897,23 +1082,58 @@ final class NativeSmokeHarness {
         editor.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0), replacementRange: editor.selectedRange())
         try check(editor.hasMarkedText(), "Could not establish native marked composition.")
         let markedSelection = editor.selectedRange()
-        panel.setContentSize(NSSize(width: 900, height: originalSize.height))
-        model.updateSidebarLayout(availableWidth: 900)
+        panel.setContentSize(NSSize(width: 760, height: originalSize.height))
         try await Task.sleep(nanoseconds: 100_000_000)
         panel.contentView?.layoutSubtreeIfNeeded()
         try check(editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor,
-                  "Resizing into the docked sidebar layout disrupted native marked composition.")
-        try check(model.toggleSidebar(), "The docked sidebar could not hide during native composition.")
-        try check(model.toggleSidebar(), "The docked sidebar could not reopen during native composition.")
-        try await Task.sleep(nanoseconds: 100_000_000)
+                  "Resizing the compact rail disrupted native marked composition.")
+        try await clickSidebarToggle()
+        try check(model.sidebarExpanded, "The native sidebar toggle did not expand during marked composition.")
+        try check(editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor &&
+                  editor.isEditable && editor.isSelectable,
+                  "Expanding the inline sidebar disrupted or disabled native marked composition.")
+        try await clickSidebarToggle()
+        try check(!model.sidebarExpanded, "The native sidebar toggle did not collapse during marked composition.")
         try check(editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor,
-                  "Hiding and showing the docked sidebar disrupted native marked composition.")
-        panel.setContentSize(originalSize)
-        model.updateSidebarLayout(availableWidth: originalSize.width)
-        if !model.sidebarIsDocked {
-            try check(!model.showSidebarDrawer() && !model.sidebarDrawerOpen && editor.hasMarkedText() && panel.firstResponder === editor,
-                      "Opening the narrow drawer interrupted native marked composition.")
+                  "Collapsing the inline sidebar disrupted native marked composition.")
+        try await clickSidebarBlank()
+        try check(model.sidebarExpanded && editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor,
+                  "An empty rail click did not expand safely during native marked composition.")
+        try await clickSidebarBlank()
+        try check(!model.sidebarExpanded && editor.hasMarkedText() && editor.selectedRange() == markedSelection && panel.firstResponder === editor,
+                  "An empty expanded-sidebar click did not collapse safely during native marked composition.")
+        try await clickSidebarToggle()
+        let beforeDividerFrame = panel.frame
+        let beforeDividerWidth = editor.bounds.width
+        let beforeDividerX = editor.convert(editor.bounds, to: nil).minX
+        func checkDividerComposition(_ expectedWidth: Double) throws {
+            try check(abs(model.sidebarExpandedWidth - expectedWidth) < 1 && model.sidebarExpanded &&
+                      descendants(root).contains(where: { $0 === editor }) && editor.hasMarkedText() &&
+                      editor.selectedRange() == markedSelection && panel.firstResponder === editor &&
+                      editor.isEditable && editor.isSelectable,
+                      "Dragging the sidebar divider disrupted native composition, editing, selection, or sidebar mode.")
         }
+        try await dragSidebarDivider(by: 32)
+        try checkDividerComposition(208)
+        try check(panel.frame == beforeDividerFrame && abs(beforeDividerWidth - editor.bounds.width - 32) < 1 &&
+                  abs(editor.convert(editor.bounds, to: nil).minX - beforeDividerX - 32) < 1,
+                  "Dragging the sidebar divider did not push tasks by the width change within the unchanged wide window.")
+        try await dragSidebarDivider(by: 200)
+        try checkDividerComposition(280)
+        try await dragSidebarDivider(by: -200)
+        try checkDividerComposition(160)
+        try await dragSidebarDivider(by: 16)
+        try checkDividerComposition(176)
+        try await clickSidebarToggle()
+        let compositionProject = model.selectedProjectID
+        guard let otherProject = model.workspace.projects.first(where: { $0.id != compositionProject }),
+              let railRow = descendants(root).compactMap({ $0 as? ProjectDragView }).first(where: { $0.destination == .tab(otherProject.id) }) else {
+            throw harnessError("A second compact-rail list was not mounted for native composition checks.")
+        }
+        try await clickSidebarRow(railRow)
+        try check(model.selectedProjectID == compositionProject && panel.firstResponder === editor &&
+                  editor.hasMarkedText() && editor.selectedRange() == markedSelection,
+                  "An actual compact-rail click interrupted marked composition or switched lists before the focus guard.")
         let publishedDuringComposition = try currentPublishedTitle()
         let persistedDuringComposition = try model.store.load().projects.flatMap(\.tasks).first(where: { $0.id == taskID })?.title
         try check(publishedDuringComposition == typed && persistedDuringComposition == typed,
@@ -939,7 +1159,119 @@ final class NativeSmokeHarness {
         try check(saved?.title == typed + "あ", "Native committed composition was not persisted.")
         try check(saved?.completed == true, "Saving native composition lost the agent's completion.")
         try check(model.toggleCompleted(projectID: model.selectedProjectID), "Completed section could not collapse after saving composition.")
+        try await clickSidebarRow(railRow)
+        try check(model.selectedProjectID == otherProject.id, "A safe native compact-rail click did not switch lists after composition committed.")
+        model.selectProject(compositionProject)
         panel.makeFirstResponder(nil)
+        print("Inline sidebar native checks passed: stable editor, focus, selection, Undo, task editing, width pushes, reversible narrow growth, user geometry, empty-space clicks with drag/right-click rejection and IME retention, native divider resizing/clamps with IME retention, shared rail group folds, and native rail IME click guarding.")
+    }
+
+    private func dragSidebarDivider(by delta: CGFloat) async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        guard let root = panel.contentView else { throw harnessError("The native sidebar content was not mounted.") }
+        root.layoutSubtreeIfNeeded()
+        let dividers = descendants(root).compactMap { $0 as? SidebarDividerView }
+        guard let divider = dividers.first(where: { $0.active }),
+              let boundary = descendants(root).compactMap({ $0 as? SidebarInteractionRegion }).first else {
+            let nativeState = dividers.map { "id=\(ObjectIdentifier($0)), hidden=\($0.isHidden), frame=\($0.frame), windowMatches=\($0.window === panel)" }.joined(separator: "; ")
+            throw harnessError("The native expanded-sidebar divider was not active (model=\(ObjectIdentifier(model)), expanded=\(model.sidebarExpanded), width=\(model.sidebarExpandedWidth), mounted=\(dividers.count), active=\(dividers.filter { $0.active }.count), native=[\(nativeState)]).")
+        }
+        let start = divider.convert(NSPoint(x: divider.bounds.midX, y: divider.bounds.midY), to: nil)
+        let hitPoint = root.superview?.convert(start, from: nil) ?? start
+        guard root.hitTest(hitPoint) === divider && !boundary.containsBlankPoint(start) else {
+            throw harnessError("The divider was unreachable or was treated as empty navigation space.")
+        }
+        let destination = NSPoint(x: start.x + delta, y: start.y)
+        let events: [(NSEvent.EventType, NSPoint)] = [(.leftMouseDown, start), (.leftMouseDragged, destination), (.leftMouseUp, destination)]
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        for (index, item) in events.enumerated() {
+            guard let event = NSEvent.mouseEvent(with: item.0, location: item.1, modifierFlags: [],
+                timestamp: timestamp + Double(index) * 0.02, windowNumber: panel.windowNumber, context: nil,
+                eventNumber: index + 1, clickCount: 1, pressure: index == events.count - 1 ? 0 : 1) else {
+                throw harnessError("Could not create the native sidebar divider drag.")
+            }
+            panel.sendEvent(event)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
+    }
+
+    private func clickSidebarBlank(dragged: Bool = false, rightClick: Bool = false) async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        guard let root = panel.contentView,
+              let boundary = descendants(root).compactMap({ $0 as? SidebarInteractionRegion }).first,
+              let content = descendants(root).compactMap({ $0 as? SidebarNavigationContentRegion }).first else {
+            throw harnessError("The native navigation content and viewport bounds were unavailable.")
+        }
+        root.layoutSubtreeIfNeeded()
+        let contentFrame = content.convert(content.bounds, to: boundary)
+        let emptyTop = max(boundary.bounds.minY + 12, contentFrame.maxY + 12)
+        let emptyBottom = boundary.bounds.maxY - 12
+        guard emptyTop < emptyBottom else { throw harnessError("The synthetic navigation had no empty space below its lists.") }
+        let localPoint = NSPoint(x: boundary.bounds.midX, y: (emptyTop + emptyBottom) / 2)
+        let point = boundary.convert(localPoint, to: nil)
+        guard boundary.containsBlankPoint(point),
+              !boundary.containsBlankPoint(content.convert(NSPoint(x: content.bounds.midX, y: content.bounds.maxY - 2), to: nil)) else {
+            throw harnessError("Navigation empty-space detection did not distinguish the padded list content from unused space below it.")
+        }
+        var events: [(NSEvent.EventType, NSPoint)] = [(rightClick ? .rightMouseDown : .leftMouseDown, point)]
+        if dragged {
+            events += [(.leftMouseDragged, NSPoint(x: point.x + 8, y: point.y)), (.leftMouseDragged, point)]
+        }
+        events.append((rightClick ? .rightMouseUp : .leftMouseUp, point))
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        for (index, item) in events.enumerated() {
+            guard let event = NSEvent.mouseEvent(with: item.0, location: item.1, modifierFlags: [],
+                timestamp: timestamp + Double(index) * 0.02, windowNumber: panel.windowNumber, context: nil,
+                eventNumber: index + 1, clickCount: 1, pressure: index == events.count - 1 ? 0 : 1) else {
+                throw harnessError("Could not create a native empty-navigation pointer gesture.")
+            }
+            panel.sendEvent(event)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
+    }
+
+    private func clickSidebarRow(_ view: ProjectDragView) async throws {
+        view.scrollToVisible(view.bounds)
+        try await clickNativeSidebarControl(view)
+    }
+
+    private func clickSidebarToggle() async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        guard let root = panel.contentView,
+              let toggle = descendants(root).compactMap({ $0 as? SidebarTogglePointerRegion }).first else {
+            throw harnessError("The native sidebar toggle was not mounted.")
+        }
+        try await clickNativeSidebarControl(toggle)
+    }
+
+    private func clickNativeSidebarControl(_ view: NSView) async throws {
+        guard let root = panel.contentView, view.window === panel else {
+            throw harnessError("The native sidebar control was not in the active panel.")
+        }
+        root.layoutSubtreeIfNeeded()
+        let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        let hitPoint = root.superview?.convert(point, from: nil) ?? point
+        guard root.hitTest(hitPoint) === view else {
+            throw harnessError("The native sidebar control was not reachable at its visible center.")
+        }
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [],
+            timestamp: timestamp, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1),
+              let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [],
+            timestamp: timestamp + 0.02, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 0) else {
+            throw harnessError("Could not create native sidebar pointer events.")
+        }
+        // Deliver through the actual window boundary, with mouse-up queued for
+        // the native control's tracking loop. A rejected down leaves only a harmless
+        // up for the app queue, without bypassing its composition/focus guard.
+        NSApp.postEvent(up, atStart: false)
+        panel.sendEvent(down)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        root.layoutSubtreeIfNeeded()
     }
 
     private func harnessError(_ message: String) -> NSError {

@@ -30,6 +30,24 @@ enum Mocha {
     static let nsSecondary = NSColor(srgbRed: 186 / 255, green: 194 / 255, blue: 222 / 255, alpha: 1)
     static let nsBlue = NSColor(srgbRed: 137 / 255, green: 180 / 255, blue: 250 / 255, alpha: 1)
     static let nsSelection = NSColor(srgbRed: 65 / 255, green: 67 / 255, blue: 85 / 255, alpha: 1)
+
+    private static let listBadgeColors = [
+        Color(red: 51 / 255, green: 66 / 255, blue: 88 / 255),
+        Color(red: 65 / 255, green: 59 / 255, blue: 85 / 255),
+        Color(red: 51 / 255, green: 75 / 255, blue: 70 / 255),
+        Color(red: 83 / 255, green: 65 / 255, blue: 56 / 255),
+        Color(red: 74 / 255, green: 67 / 255, blue: 44 / 255),
+        Color(red: 75 / 255, green: 55 / 255, blue: 64 / 255)
+    ]
+
+    /// FNV-1a uses the immutable list ID, so identity colors survive renaming,
+    /// reordering, grouping, and relaunch without storing presentation state.
+    static func listBadgeColor(for id: String) -> Color {
+        let value = id.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { hash, byte in
+            (hash ^ UInt64(byte)) &* 1_099_511_628_211
+        }
+        return listBadgeColors[Int(value % UInt64(listBadgeColors.count))]
+    }
 }
 
 /// Only the background feathers; row content and its hit areas stay opaque.

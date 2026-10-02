@@ -7,25 +7,25 @@ final class TodoPanel: NSPanel {
     var dismissPanel: (() -> Void)?
     weak var sidebarInteractionOwner: NSView?
     var sidebarEventDisposition: ((NSEvent) -> SidebarEventDisposition)?
-    var sidebarDidRouteEvent: ((NSEvent) -> Void)?
-    var dismissSidebarDrawer: (() -> Bool)?
+    private var sidebarExpansionApplied = false
+    private var sidebarExpandedWidthApplied = SidebarLayout.expandedWidth
+    private var applyingSidebarGeometry = false
+    private var sidebarExpansionRestore: SidebarExpansionRestore?
     private weak var pressedTaskBar: TaskBarClickRegion?
     private var taskBarDisposition: TitleClickDisposition = .editOnly
     private var taskBarWasDragged = false
+    private struct SidebarExpansionRestore {
+        let originalFrame: NSRect
+        let expandedFrame: NSRect
+    }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
     override func sendEvent(_ event: NSEvent) {
-        switch sidebarEventDisposition?(event) ?? .normal {
-        case .consume: return
-        case .sidebar:
-            // Native task regions cover the underlying task coordinates. A
-            // modal sidebar owns these events before that routing can run.
-            super.sendEvent(event)
-            sidebarDidRouteEvent?(event)
-            return
-        case .normal: break
-        }
+        // A fresh press ends any abandoned task sequence before navigation
+        // can consume it. An active task press owns its drag and release even
+        // when the pointer crosses into the sidebar.
+        if event.type == .leftMouseDown { pressedTaskBar = nil }
         if event.type == .leftMouseDragged, pressedTaskBar != nil {
             taskBarWasDragged = true
             return
@@ -38,8 +38,15 @@ final class TodoPanel: NSPanel {
             }
             return
         }
+        switch sidebarEventDisposition?(event) ?? .normal {
+        case .consume: return
+        case .sidebar:
+            // Navigation owns new events here before custom task routing.
+            super.sendEvent(event)
+            return
+        case .normal: break
+        }
         guard event.type == .leftMouseDown else { super.sendEvent(event); return }
-        pressedTaskBar = nil
         let hitPoint = contentView?.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
         if attachedSheet == nil, let hit = contentView?.hitTest(hitPoint),
            hit is HeaderDragView || hit is PanelChrome {
@@ -78,8 +85,61 @@ final class TodoPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) {
         if let editor = firstResponder as? NSTextView, editor.hasMarkedText() { return }
         guard attachedSheet == nil else { return }
-        if dismissSidebarDrawer?() == true { return }
         dismissPanel?()
+    }
+
+    /// Keep a usable task width when names expand. Geometry belongs to the
+    /// window rather than persisted workspace navigation state.
+    func applySidebarExpansion(_ expanded: Bool, expandedWidth: Double = 176) {
+        let layout = SidebarLayout(expanded: expanded, preferredWidth: expandedWidth)
+        let minimumWidth = layout.minimumWindowWidth
+        let modeChanged = expanded != sidebarExpansionApplied
+        let widthChanged = layout.preferredWidth != sidebarExpandedWidthApplied
+        if widthChanged { discardSidebarExpansionRestore() }
+        sidebarExpansionApplied = expanded
+        sidebarExpandedWidthApplied = layout.preferredWidth
+        let original = frame
+        applyingSidebarGeometry = true
+        minSize = NSSize(width: minimumWidth, height: 240)
+        applyingSidebarGeometry = false
+        guard modeChanged || (expanded && widthChanged) else { return }
+        if expanded {
+            if modeChanged { sidebarExpansionRestore = nil }
+            guard original.width < minimumWidth else { return }
+            var proposed = original
+            proposed.size.width = minimumWidth
+            // Width growth preserves the left and top edges whenever it fits.
+            let reachable = WindowGeometry.reachable(proposed, screens: NSScreen.screens.map(\.visibleFrame))
+            setSidebarFrame(reachable)
+            // Only toggling into expansion can create an automatic restore.
+            // Choosing a different width is an explicit manual arrangement.
+            if modeChanged { sidebarExpansionRestore = SidebarExpansionRestore(originalFrame: original, expandedFrame: frame) }
+        } else {
+            guard let restore = sidebarExpansionRestore else { return }
+            sidebarExpansionRestore = nil
+            guard frame == restore.expandedFrame else { return }
+            setSidebarFrame(WindowGeometry.reachable(restore.originalFrame, screens: NSScreen.screens.map(\.visibleFrame)))
+        }
+    }
+
+    func discardSidebarExpansionRestore() { sidebarExpansionRestore = nil }
+
+    private func setSidebarFrame(_ proposed: NSRect) {
+        applyingSidebarGeometry = true
+        setFrame(proposed, display: true)
+        applyingSidebarGeometry = false
+    }
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        if !applyingSidebarGeometry, frameRect != frame { sidebarExpansionRestore = nil }
+        super.setFrame(frameRect, display: flag)
+    }
+
+    /// AppKit's native move loop also reports geometry through delegate
+    /// notifications. Once a user changes it, moving back cannot revive restore.
+    func sidebarGeometryDidChange() {
+        guard !applyingSidebarGeometry, let restore = sidebarExpansionRestore else { return }
+        if frame != restore.expandedFrame { sidebarExpansionRestore = nil }
     }
 }
 

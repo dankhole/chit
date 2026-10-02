@@ -86,6 +86,13 @@ with the `long_task_id` returned by `new` when expanded content is the affected
 state. Keep custom fixture files inside the session and modify lists through
 `lab.py cli SESSION`; do not substitute `build/chit` or a CLI from PATH.
 
+Plain snapshots show the compact list rail. `--snapshot-sidebar` expands list
+names beside the tasks. In a fresh session, a requested width below 453 points
+grows to 453 so the task pane remains usable; a saved custom sidebar width
+adjusts that minimum. Use a plain 320-point capture to inspect the smallest
+rail layout. The create button, group headings, and list rows keep the same
+vertical positions in both modes.
+
 The launcher passes `--lab-hidden` for ordinary snapshots and `--lab-visible`
 only for an explicitly visible snapshot. The app rejects hidden requests that
 need visible windows instead of silently displaying them. Normal Chit is

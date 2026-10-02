@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import TodoCore
 
@@ -16,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // The retained local.dcole.TotTodo bundle ID preserves the existing preferences domain.
     private var preferences = UserDefaults.standard
     private var screenObserver: NSObjectProtocol?
+    private var sidebarObservation: AnyCancellable?
     private var isHarness = false
     private var isolatedStorePath: String?
     private var snapshotPath: String?
@@ -66,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if model.expandedTaskID != taskID { model.toggleDetails(taskID: taskID) }
         }
         if snapshotPath != nil {
+            // Captures choose a deterministic mode independently of prior
+            // session preferences; --snapshot-sidebar explicitly shows names.
+            if model.sidebarExpanded != snapshotSidebar { model.toggleSidebar() }
             if snapshotRecovery { _ = model.beginCatalogRecovery() }
             let showCompleted = snapshotCompleted || model.selectedProject?.tasks.contains(where: { $0.id == snapshotExpandedTask && $0.completed }) == true
             if showCompleted != model.isCompletedExpanded(projectID: model.selectedProjectID) {
@@ -78,12 +83,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         makePanel()
-        if snapshotPath != nil { panel.setContentSize(snapshotSize ?? NSSize(width: 424, height: 350)); clampWindow() }
-        if snapshotSidebar {
-            model.updateSidebarLayout(availableWidth: panel.contentView?.bounds.width ?? panel.frame.width)
-            if model.sidebarIsDocked {
-                if !model.sidebarDockedOpen { _ = model.toggleSidebar() }
-            } else { _ = model.showSidebarDrawer() }
+        if snapshotPath != nil {
+            var size = snapshotSize ?? NSSize(width: 424, height: 350)
+            size.width = max(size.width, panel.minSize.width)
+            panel.setContentSize(size)
+            clampWindow()
         }
         if snapshotContainedBackdrop { NativePreview.containBackdrop(in: panel) }
         configureSoftwareUpdates()
@@ -177,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.backgroundColor = .clear
         panel.alphaValue = 1
         panel.hasShadow = false
-        panel.minSize = NSSize(width: 320, height: 240)
+        panel.minSize = NSSize(width: SidebarLayout.minimumCollapsedWindowWidth, height: 240)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.appearance = NSAppearance(named: .darkAqua)
         let surface = PanelSurface(model: model)
@@ -193,6 +197,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.clampWindow() }
         }
+        // Published emits before storing the new value. Resizing the window
+        // synchronously here can force SwiftUI to render the old mode/width.
+        // Apply geometry on the next main-queue turn, after model publication.
+        sidebarObservation = model.$sidebarExpanded.combineLatest(model.$sidebarExpandedWidth)
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in self?.panel.applySidebarExpansion(state.0, expandedWidth: state.1) }
     }
 
     private func clampWindow() {
@@ -309,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func hideFromMenu() { hidePanel() }
     @objc private func toggleSidebar() {
         guard panel?.attachedSheet == nil, model?.isStoreAvailable == true else { return }
-        _ = model.toggleSidebar()
+        model.toggleSidebar()
     }
     @objc private func closeFromMenu() {
         if FilePanelPresenter.cancelActivePanel() { return }
@@ -355,8 +366,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { hidePanel(); return false }
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { model.undoManager }
-    func windowDidMove(_ notification: Notification) { saveGeometry() }
-    func windowDidResize(_ notification: Notification) { saveGeometry() }
+    func windowDidMove(_ notification: Notification) {
+        panel.sidebarGeometryDidChange()
+        saveGeometry()
+    }
+    func windowDidResize(_ notification: Notification) {
+        panel.sidebarGeometryDidChange()
+        saveGeometry()
+    }
     private func saveGeometry() { if let panel { preferences.set(NSStringFromRect(panel.frame), forKey: "window.frame") } }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -387,6 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         FilePanelPresenter.cancelActivePanel()
         shortcut?.stop()
+        sidebarObservation = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
     }
 
