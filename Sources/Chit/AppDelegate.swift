@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var shortcutValue: ShortcutValue?
     private var recorder: ShortcutRecorder?
     private var softwareUpdates: SoftwareUpdateController?
+    private var loginItem: LoginItemController!
     private var previousApplication: NSRunningApplication?
     // The retained local.dcole.TotTodo bundle ID preserves the existing preferences domain.
     private var preferences = UserDefaults.standard
@@ -32,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var snapshotNewList = false
     private var snapshotRecovery = false
     private var snapshotSidebar = false
+    private var snapshotSettings = false
     private var previewBackdrop: NSWindow?
     private var smokeTest = false
     private var filePanelTest = false
@@ -90,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             clampWindow()
         }
         if snapshotContainedBackdrop { NativePreview.containBackdrop(in: panel) }
+        loginItem = LoginItemController.start(preferences: preferences, isLab: LabEnvironment.isEnabled,
+                                              isIsolated: isHarness || isolatedStorePath != nil)
         configureSoftwareUpdates()
         makeMainMenu()
         if showsInterface {
@@ -149,6 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case "--snapshot-new-list": snapshotNewList = true
             case "--snapshot-recovery": snapshotRecovery = true
             case "--snapshot-sidebar": snapshotSidebar = true
+            case "--snapshot-settings": snapshotSettings = true
             default: break // AppKit and test runners may pass their own launch arguments.
             }
             index += 1
@@ -164,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if (smokeTest || filePanelTest || snapshotPath != nil) && isolatedStorePath == nil {
             throw harnessError("--smoke-test, --file-panel-test and --snapshot require --store with an isolated workspace path.")
         }
-        if (snapshotExpandedTask != nil || snapshotSize != nil || !snapshotCollapsedGroups.isEmpty || snapshotSolid || snapshotContrast || snapshotBackdrop || snapshotCompleted || snapshotNewList || snapshotRecovery || snapshotSidebar) && snapshotPath == nil {
+        if (snapshotExpandedTask != nil || snapshotSize != nil || !snapshotCollapsedGroups.isEmpty || snapshotSolid || snapshotContrast || snapshotBackdrop || snapshotCompleted || snapshotNewList || snapshotRecovery || snapshotSidebar || snapshotSettings) && snapshotPath == nil {
             throw harnessError("Snapshot layout flags require --snapshot and an isolated --store.")
         }
     }
@@ -303,7 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 popover = NSPopover()
                 popover.behavior = .transient
                 popover.appearance = NSAppearance(named: .darkAqua)
-                let controller = NSHostingController(rootView: AppearanceSettingsView(model: self.model))
+                let controller = NSHostingController(rootView: AppearanceSettingsView(model: self.model, loginItem: self.loginItem))
+                controller.sizingOptions = [.preferredContentSize]
                 popover.contentViewController = controller
                 popover.contentSize = controller.view.fittingSize
                 self.settingsPopover = popover
@@ -506,7 +512,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let root = panel.contentView else { throw harnessError("No content view to snapshot.") }
         // Capture the complete owning view hierarchy, including custom window controls.
         // Caching our own view hierarchy needs no screen-recording permission.
-        let content = root.superview ?? root
+        let content: NSView
+        if snapshotSettings {
+            let settings = NSHostingView(rootView: AppearanceSettingsView(model: model, loginItem: loginItem)
+                .background(Color(nsColor: .windowBackgroundColor)))
+            settings.appearance = NSAppearance(named: .darkAqua)
+            settings.setFrameSize(settings.fittingSize)
+            content = settings
+        } else { content = root.superview ?? root }
         content.layoutSubtreeIfNeeded()
         content.displayIfNeeded()
         guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { throw harnessError("Could not allocate snapshot bitmap.") }

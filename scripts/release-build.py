@@ -147,6 +147,7 @@ def build(options):
     framework = app / "Contents/Frameworks/Sparkle.framework"
     shutil.copytree(dependency / "Sparkle.framework", framework, symlinks=True)
     shutil.copy2(REPO / "Vendor/libyaml/LICENSE", app / "Contents/Resources/libyaml-LICENSE")
+    shutil.copy2(REPO / "Resources/Chit.icns", app / "Contents/Resources/Chit.icns")
     shutil.copy2(dependency / "LICENSE", app / "Contents/Resources/Sparkle-LICENSE")
     with (app / "Contents/Info.plist").open("wb") as output:
         plistlib.dump(distribution_info(options), output)

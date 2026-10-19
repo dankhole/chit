@@ -43,6 +43,7 @@ collect_sources "$ROOT/Sources/Chit"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
 xcrun swiftc "${COMMON[@]}" -I "$OUT" -L "$OUT" -lTodoCore -lChitYAML -module-name Chit "${SOURCES[@]}" -o "$APP/Contents/MacOS/Chit"
 cp "$ROOT/Vendor/libyaml/LICENSE" "$APP/Contents/Resources/libyaml-LICENSE"
+cp "$ROOT/Resources/Chit.icns" "$APP/Contents/Resources/Chit.icns"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 plutil -replace CFBundleExecutable -string Chit "$APP/Contents/Info.plist"
 # The normal profile retains its legacy preferences identity.
