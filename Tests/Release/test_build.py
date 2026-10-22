@@ -108,6 +108,51 @@ class ReleasePreflightTests(unittest.TestCase):
                     builder.sign(Path("validation.app"), options(signing_identity=CERTIFICATE, ad_hoc=False))
 
 
+class ReleaseAssemblyTests(unittest.TestCase):
+    def test_cli_and_app_remain_distinct_on_case_insensitive_filesystems(self):
+        with tempfile.TemporaryDirectory(prefix="chit-release-assembly-") as temporary:
+            root = Path(temporary).resolve()
+            output = root / "release"
+            dependency = root / "sparkle"
+            for name in ("Autoupdate", "Sparkle", "Updater.app/Contents/MacOS/Updater",
+                         "XPCServices/Downloader.xpc/Contents/MacOS/Downloader",
+                         "XPCServices/Installer.xpc/Contents/MacOS/Installer"):
+                path = dependency / "Sparkle.framework/Versions/B" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Synthetic Sparkle component")
+            (dependency / "LICENSE").write_text("Synthetic Sparkle license")
+            compiled = {}
+
+            def command(arguments, **kwargs):
+                if arguments[:2] == ["xcrun", "swiftc"]:
+                    path = Path(arguments[arguments.index("-o") + 1])
+                    # Alias case-only output names even when this test runs on a case-sensitive volume.
+                    path = compiled.setdefault(str(path).casefold(), path)
+                    module = arguments[arguments.index("-module-name") + 1]
+                    architecture = arguments[arguments.index("-target") + 1].split("-")[0]
+                    path.write_text(f"{module}:{architecture}\n")
+                elif arguments[:3] == ["xcrun", "lipo", "-create"]:
+                    output_index = arguments.index("-output")
+                    contents = "".join(compiled[str(path).casefold()].read_text()
+                                       for path in arguments[3:output_index])
+                    Path(arguments[output_index + 1]).write_text(contents)
+                return subprocess.CompletedProcess(arguments, 0, stdout="/synthetic-sdk\n")
+
+            with patch.object(builder, "OUT", output), patch.object(builder, "run", side_effect=command), \
+                    patch.object(builder.importlib.util, "spec_from_file_location"), \
+                    patch.object(builder.importlib.util, "module_from_spec") as module:
+                module.return_value.fetch.return_value = dependency
+                builder.build(options())
+
+            cli = "".join(f"ChitCLI:{architecture}\n" for architecture in builder.ARCHITECTURES)
+            app = "".join(f"Chit:{architecture}\n" for architecture in builder.ARCHITECTURES)
+            self.assertEqual((output / "Chit.app/Contents/MacOS/Chit").read_text(), app)
+            for relative in ("chit", "todo", "Chit.app/Contents/Resources/bin/chit",
+                             "Chit.app/Contents/MacOS/todo"):
+                with self.subTest(output=relative):
+                    self.assertEqual((output / relative).read_text(), cli)
+
+
 class SparkleDependencyGuards(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="chit-release-dependency-")

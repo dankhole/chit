@@ -134,12 +134,13 @@ def build(options):
              "-module-name", "TodoCore", "-emit-module-path", work / "TodoCore.swiftmodule",
              *sources("Sources/TodoCore"), "-o", work / "libTodoCore.a"])
         links = ["-I", work, "-L", work, "-lTodoCore", "-lChitYAML"]
+        # CLI and app intermediate names must differ beyond case on default macOS filesystems.
         run(["xcrun", "swiftc", *common, *links, *sources("Sources/ChitCLI"), "-module-name", "ChitCLI",
-             "-o", work / "chit"])
+             "-o", work / "ChitCLI"])
         run(["xcrun", "swiftc", *common, *links, "-D", "CHIT_DISTRIBUTION", "-F", dependency,
              "-framework", "Sparkle", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
-             *sources("Sources/Chit"), "-module-name", "Chit", "-o", work / "Chit"])
-    for executable, output in (("Chit", app / "Contents/MacOS/Chit"), ("chit", OUT / "chit")):
+             *sources("Sources/Chit"), "-module-name", "Chit", "-o", work / "ChitApp"])
+    for executable, output in (("ChitApp", app / "Contents/MacOS/Chit"), ("ChitCLI", OUT / "chit")):
         run(["xcrun", "lipo", "-create", *[OUT / "work" / arch / executable for arch in ARCHITECTURES], "-output", output])
         run(["xcrun", "lipo", output, "-verify_arch", *ARCHITECTURES])
     shutil.copy2(OUT / "chit", app / "Contents/Resources/bin/chit")
