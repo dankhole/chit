@@ -230,7 +230,6 @@ private struct ProjectTaskList: View {
     @ObservedObject var model: AppModel
     let project: Project
     @State private var topTaskID: String?
-    @State private var interactiveFrames: [CGRect] = []
     @StateObject private var dragState = TaskDragState()
 
     init(model: AppModel, project: Project) {
@@ -274,9 +273,9 @@ private struct ProjectTaskList: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .coordinateSpace(name: "task-list-interaction")
-        .onPreferenceChange(TaskInteractiveFrames.self) { interactiveFrames = $0 }
-        .background {
-            TaskBlankClickArea(excludedRects: interactiveFrames, onBlankClick: model.clearTaskSelection)
+        // Keep per-pixel bounds updates out of task-list state and its editors.
+        .backgroundPreferenceValue(TaskInteractiveFrames.self) { frames in
+            TaskBlankClickArea(excludedRects: frames, onBlankClick: model.clearTaskSelection)
         }
         .scrollPosition(id: $topTaskID, anchor: .top)
         .disabled(!model.isSelectedListAvailable)

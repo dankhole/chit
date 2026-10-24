@@ -34,6 +34,7 @@ final class NativeSmokeHarness {
         if let task = model.selectedProject?.tasks.first(where: { $0.id == task.id }) { model.deleteTask(task) }
         if let previousExpanded { model.toggleDetails(taskID: previousExpanded) }
         try await exerciseTaskRowClicks()
+        try await exerciseTaskScrolling()
     }
 
     private func exerciseLifecycle() throws {
@@ -413,6 +414,69 @@ final class NativeSmokeHarness {
                 throw harnessError("Repeated task additions moved, replaced, or defocused the top entry.")
             }
         }
+    }
+
+    private func exerciseTaskScrolling() async throws {
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let originalProject = model.selectedProjectID
+        let tasks = (1...40).map { TaskItem(title: "Synthetic scrolling task \($0)") }
+        let project = Project(name: "Scroll smoke", tasks: tasks)
+        _ = try model.store.apply(.addProject(project: project, index: nil))
+        defer {
+            panel.makeFirstResponder(nil)
+            if let current = try? model.store.load().projects.first(where: { $0.id == project.id }) {
+                _ = try? model.store.apply(.deleteProject(id: project.id, expected: current))
+            }
+            model.refresh()
+            model.selectProject(originalProject)
+        }
+        model.refresh()
+        model.selectProject(project.id)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        guard let root = panel.contentView else { throw harnessError("Scroll fixture did not mount.") }
+        root.layoutSubtreeIfNeeded()
+        let editors = descendants(root).compactMap { $0 as? PlainTextView }.filter { editor in
+            tasks.contains(where: { "\($0.id):title" == editor.editorIdentity })
+        }
+        guard let editor = editors.first, let scroll = editor.enclosingScrollView,
+              let blank = descendants(root).compactMap({ $0 as? TaskBlankClickRegion }).first else {
+            throw harnessError("The scrolling task pane was not mounted.")
+        }
+        let storageIDs = Set(editors.compactMap { $0.textStorage.map(ObjectIdentifier.init) })
+        var formattingUpdates = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification,
+                                                               object: nil, queue: nil) { notification in
+            if let storage = notification.object as? NSTextStorage, storageIDs.contains(ObjectIdentifier(storage)) {
+                formattingUpdates += 1
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let clip = scroll.contentView
+        let initialOffset = clip.bounds.origin
+        for _ in 1...12 {
+            guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                      wheel1: -11, wheel2: 0, wheel3: 0).flatMap({ NSEvent(cgEvent: $0) }) else {
+                throw harnessError("Could not create a native task scroll event.")
+            }
+            scroll.scrollWheel(with: wheel)
+            try await Task.sleep(nanoseconds: 30_000_000)
+            root.layoutSubtreeIfNeeded()
+            guard let visible = editors.first(where: { $0.visibleRect.height > 12 }) else {
+                throw harnessError("Scrolling hid every synthetic task editor.")
+            }
+            let point = visible.convert(NSPoint(x: visible.bounds.midX, y: visible.visibleRect.midY), to: nil)
+            guard !blank.containsBlankPoint(point) else {
+                throw harnessError("Scrolling left stale click bounds over a visible task.")
+            }
+        }
+        guard clip.bounds.origin.y > initialOffset.y + 100, formattingUpdates == 0 else {
+            throw harnessError("Scrolling did not advance without reformatting unchanged editors (updates=\(formattingUpdates)).")
+        }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        guard model.scrollAnchor(projectID: project.id) != nil else {
+            throw harnessError("Scrolling did not persist a task anchor.")
+        }
+        print("Task scrolling checks passed: native wheel events, no unchanged-editor formatting, current click bounds, and persisted scroll anchor.")
     }
 
     private func exerciseTaskRowClicks() async throws {

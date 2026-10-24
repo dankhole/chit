@@ -57,7 +57,7 @@ struct NativeTextEditor: NSViewRepresentable {
         view.isAutomaticLinkDetectionEnabled = false
         view.setAccessibilityLabel(placeholder.isEmpty ? "Task title" : placeholder)
         view.string = text
-        configure(view)
+        configure(view, coordinator: context.coordinator)
         if let selection = savedSelection {
             view.setSelectedRange(clamped(selection, length: (text as NSString).length))
         }
@@ -71,11 +71,12 @@ struct NativeTextEditor: NSViewRepresentable {
         if view.string != text && !view.hasMarkedText() {
             let range = view.selectedRange()
             view.localUndo.removeAllActions()
+            context.coordinator.presentation = nil
             view.string = text
             view.setSelectedRange(clamped(range, length: (text as NSString).length))
             context.coordinator.synchronizedText = text
         }
-        configure(view)
+        configure(view, coordinator: context.coordinator)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: PlainTextView, context: Context) -> CGSize? {
@@ -87,20 +88,29 @@ struct NativeTextEditor: NSViewRepresentable {
         return CGSize(width: width, height: context.coordinator.measuredHeight(of: nsView, width: width))
     }
 
-    private func configure(_ view: PlainTextView) {
-        view.placeholder = placeholder
-        view.font = NSFont.systemFont(ofSize: fontSize)
-        view.textContainerInset = NSSize(width: 0, height: Mocha.textRowTopInset(fontSize: fontSize))
-        view.textColor = secondary || completed ? Mocha.nsSecondary : Mocha.nsText
-        view.linkTextAttributes = [.foregroundColor: Mocha.nsBlue, .underlineStyle: NSUnderlineStyle.single.rawValue]
+    private func configure(_ view: PlainTextView, coordinator: Coordinator) {
+        if view.placeholder != placeholder {
+            view.placeholder = placeholder
+            view.needsDisplay = true
+        }
         view.submitOnReturn = submitOnReturn
         view.onSubmit = onSubmit
         view.onTitlePointerDown = onTitlePointerDown
         view.onTitleSingleClick = onTitleSingleClick
         view.onTitleFocus = onTitleFocus
         view.deadlineActions = deadlineActions
+        // SwiftUI can update representables while scrolling even when their
+        // content is unchanged. Do not invalidate TextKit layout in that case.
+        let presentation = Presentation(text: view.string, fontSize: fontSize,
+                                        secondary: secondary, completed: completed, links: links)
+        guard !view.hasMarkedText(), coordinator.presentation != presentation else { return }
+        coordinator.presentation = presentation
+        view.font = NSFont.systemFont(ofSize: fontSize)
+        view.textContainerInset = NSSize(width: 0, height: Mocha.textRowTopInset(fontSize: fontSize))
+        view.textColor = secondary || completed ? Mocha.nsSecondary : Mocha.nsText
+        view.linkTextAttributes = [.foregroundColor: Mocha.nsBlue, .underlineStyle: NSUnderlineStyle.single.rawValue]
         // Formatting is presentation only. The binding and shared store contain strings.
-        if !view.hasMarkedText(), let storage = view.textStorage {
+        if let storage = view.textStorage {
             let full = NSRange(location: 0, length: storage.length)
             storage.beginEditing()
             storage.removeAttribute(.strikethroughStyle, range: full)
@@ -121,7 +131,16 @@ struct NativeTextEditor: NSViewRepresentable {
         return NSRange(location: start, length: min(range.length, length - start))
     }
 
+    struct Presentation: Equatable {
+        let text: String
+        let fontSize: CGFloat
+        let secondary: Bool
+        let completed: Bool
+        let links: Bool
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
+        var presentation: Presentation?
         var parent: NativeTextEditor
         var synchronizedText: String
         private let measurementStorage = NSTextStorage()
@@ -159,6 +178,9 @@ struct NativeTextEditor: NSViewRepresentable {
         }
         func textDidChange(_ notification: Notification) {
             guard let view = notification.object as? PlainTextView else { return }
+            // Native edits/Undo can change attributes even if the final string
+            // matches a previously applied presentation (including IME changes).
+            presentation = nil
             // Do not publish provisional IME text to the persistence layer.
             if !view.hasMarkedText() { publish(view.string) }
             view.invalidateIntrinsicContentSize()
